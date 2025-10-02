@@ -1,6 +1,7 @@
 """Paper trading module for Binance Testnet."""
 
 import argparse
+from decimal import Decimal
 from typing import Optional
 
 from binance.client import Client
@@ -10,6 +11,7 @@ from src.backtest.strategy import SMAStrategy
 from src.config import settings
 from src.data.binance_client import BinanceDataClient
 from src.filters.exchange_filters import ExchangeFilters
+from src.models.position import PositionTracker
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__, log_file="paper_trader.log")
@@ -47,6 +49,7 @@ class PaperTrader:
 
         self.data_client = BinanceDataClient(testnet=testnet)
         self.filters = ExchangeFilters(self.client)
+        self.position_tracker = PositionTracker()
 
         logger.info(f"PaperTrader initialized (testnet={testnet})")
 
@@ -150,15 +153,61 @@ class PaperTrader:
         latest_entry = entries.iloc[-1]
         latest_exit = exits.iloc[-1]
 
-        if latest_entry:
-            logger.info("Entry signal detected - placing BUY order")
-            self.place_market_order(symbol, "BUY", quote_amount)
+        # Get current position status
+        has_position = self.position_tracker.has_open_position(symbol)
 
-        elif latest_exit:
+        if latest_entry and not has_position:
+            logger.info("Entry signal detected - placing BUY order")
+            response = self.place_market_order(symbol, "BUY", quote_amount)
+
+            if response and response.get("status") == "FILLED":
+                # Track the opened position
+                executed_qty = Decimal(response["executedQty"])
+                # Calculate average fill price
+                cum_quote = Decimal(response["cummulativeQuoteQty"])
+                avg_price = cum_quote / executed_qty
+
+                self.position_tracker.open_position(
+                    symbol=symbol,
+                    quantity=executed_qty,
+                    entry_price=avg_price,
+                    order_id=str(response["orderId"]),
+                )
+                logger.info(f"Position opened: {executed_qty} @ {avg_price}")
+
+        elif latest_exit and has_position:
             logger.info("Exit signal detected - placing SELL order")
-            # For sell, we'd need to calculate position size
-            # Simplified for MVP: skip sell for now
-            logger.warning("SELL signal ignored (position tracking not implemented)")
+            position = self.position_tracker.get_open_position(symbol)
+
+            if position:
+                # Sell the entire position
+                # For market SELL, we need to specify quantity in base currency
+                response = self.client.create_order(
+                    symbol=symbol,
+                    side="SELL",
+                    type="MARKET",
+                    quantity=float(position.quantity),
+                )
+
+                if response and response.get("status") == "FILLED":
+                    # Calculate average exit price
+                    cum_quote = Decimal(response["cummulativeQuoteQty"])
+                    executed_qty = Decimal(response["executedQty"])
+                    avg_exit_price = cum_quote / executed_qty
+
+                    # Close position
+                    self.position_tracker.close_position(
+                        symbol=symbol,
+                        exit_price=avg_exit_price,
+                        exit_order_id=str(response["orderId"]),
+                    )
+                    logger.info(f"Position closed @ {avg_exit_price}")
+
+        elif latest_entry and has_position:
+            logger.info("Entry signal detected but position already open - skipping")
+
+        elif latest_exit and not has_position:
+            logger.info("Exit signal detected but no position open - skipping")
 
         else:
             logger.info("No signal - no trade")

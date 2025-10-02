@@ -33,7 +33,9 @@ class SMAStrategy:
         Returns:
             Tuple of (entry_signals, exit_signals) as boolean Series
         """
-        close = df["close"]
+        # Shift close prices to prevent look-ahead bias
+        # Signal at bar i uses only data through bar i-1
+        close = df["close"].shift(1)
 
         # Calculate SMAs
         fast_sma = vbt.MA.run(close, self.fast_window, short_name="fast")
