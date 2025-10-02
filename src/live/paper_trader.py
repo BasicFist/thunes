@@ -9,6 +9,7 @@ from typing import Any
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
+from src.alerts.telegram import TelegramBot
 from src.backtest.rsi_strategy import RSIStrategy
 from src.backtest.strategy import SMAStrategy
 from src.config import ARTIFACTS_DIR, settings
@@ -37,6 +38,7 @@ class PaperTrader:
         testnet: bool = True,
         enable_risk_manager: bool = True,
         enable_performance_tracking: bool = True,
+        enable_telegram: bool = True,
     ) -> None:
         """
         Initialize paper trader.
@@ -45,6 +47,7 @@ class PaperTrader:
             testnet: If True, use testnet. If False, use production (DANGEROUS)
             enable_risk_manager: Enable risk management validation
             enable_performance_tracking: Enable performance decay monitoring
+            enable_telegram: Enable Telegram notifications
         """
         if not testnet:
             logger.critical("PRODUCTION MODE - REAL MONEY AT RISK!")
@@ -54,6 +57,7 @@ class PaperTrader:
         self.testnet = testnet
         self.enable_risk_manager = enable_risk_manager
         self.enable_performance_tracking = enable_performance_tracking
+        self.enable_telegram = enable_telegram
 
         # Initialize clients
         if testnet:
@@ -86,6 +90,14 @@ class PaperTrader:
                 rolling_window_days=7,
             )
             logger.info("PerformanceTracker enabled")
+
+        # Telegram notifications
+        if enable_telegram:
+            self.telegram = TelegramBot()
+            if self.telegram.enabled:
+                logger.info("Telegram notifications enabled")
+            else:
+                logger.warning("Telegram disabled: Missing token or chat_id in .env")
 
         # Parameter management
         self.params_file = ARTIFACTS_DIR / "optimize" / "current_parameters.json"
@@ -254,6 +266,20 @@ class PaperTrader:
             )
             if not is_valid:
                 logger.warning(f"Risk check failed: {reason}")
+
+                # Send Telegram kill-switch alert if daily loss limit exceeded
+                if "KILL-SWITCH" in reason and self.enable_telegram and self.telegram.enabled:
+                    daily_loss = self.risk_manager.get_daily_pnl()
+                    self.telegram.send_message_sync(
+                        "🚨 *KILL-SWITCH TRIGGERED* 🚨\n\n"
+                        "*Daily Loss Limit Exceeded*\n"
+                        f"Current Loss: `{daily_loss:.2f} USDT`\n"
+                        f"Limit: `{self.risk_manager.max_daily_loss:.2f} USDT`\n\n"
+                        "⛔ *TRADING HALTED* ⛔\n"
+                        f"Time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n\n"
+                        "Action Required: Review logs and adjust strategy parameters"
+                    )
+
                 return
 
         # Fetch recent data
@@ -379,11 +405,24 @@ class PaperTrader:
         if is_decaying:
             logger.warning(f"⚠️ Performance decay detected: {severity} (Sharpe={sharpe:.2f})")
 
+            # Send Telegram alert for parameter decay
+            if self.enable_telegram and self.telegram.enabled:
+                threshold = (
+                    self.performance_tracker.critical_threshold
+                    if severity == "CRITICAL"
+                    else self.performance_tracker.sharpe_threshold
+                )
+                self.telegram.send_message_sync(
+                    f"{'🚨' if severity == 'CRITICAL' else '⚠️'} *PARAMETER DECAY: {severity}*\n\n"
+                    f"Current Sharpe: `{sharpe:.4f}`\n"
+                    f"Threshold: `{threshold:.4f}`\n\n"
+                    f"Time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
+                )
+
             # Check if immediate re-optimization needed
             should_trigger, reason = self.performance_tracker.should_trigger_reoptimization()
             if should_trigger:
                 logger.critical(f"🚨 RE-OPTIMIZATION REQUIRED: {reason}")
-                # TODO: Trigger Telegram alert (Phase 2.1)
 
         # Log snapshot every run
         self.performance_tracker.log_performance_snapshot()

@@ -109,4 +109,7 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html",
 ]
+markers = [
+    "asyncio: mark test as async (requires pytest-asyncio)",
+]
 asyncio_mode = "auto"
