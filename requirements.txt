@@ -1,6 +1,7 @@
 # Core Trading & Data
 python-binance==1.0.19
 vectorbt==0.26.2
+plotly<5.0.0  # vectorbt compatibility (heatmapgl removed in plotly 5.x)
 pandas==2.2.0
 numpy==1.26.3
 ccxt==4.2.25

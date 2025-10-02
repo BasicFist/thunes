@@ -2,8 +2,9 @@ name: Paper Trading
 
 on:
   workflow_dispatch:  # Manual trigger
-  schedule:
-    - cron: '*/10 * * * *'  # Every 10 minutes (staging)
+  # DISABLED: Vectorbt/plotly incompatibility - re-enable after Phase 3.2
+  # schedule:
+  #   - cron: '*/10 * * * *'  # Every 10 minutes (staging)
 
 jobs:
   paper-trade:
