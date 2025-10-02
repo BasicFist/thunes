@@ -87,6 +87,13 @@ module = [
     "ccxt.*",
     "optuna.*",
     "river.*",
+    "binance.*",
+    "xgboost.*",
+    "hmmlearn.*",
+    "sklearn.*",
+    "pybreaker.*",
+    "cudf.*",
+    "pandas.*",  # Use pandas-stubs for stricter checking later
 ]
 ignore_missing_imports = true
 
