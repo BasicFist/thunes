@@ -1,6 +1,6 @@
 """Tests for configuration module."""
 
-from src.config import settings, ARTIFACTS_DIR, LOGS_DIR, PROJECT_ROOT
+from src.config import ARTIFACTS_DIR, LOGS_DIR, PROJECT_ROOT, settings
 
 
 def test_settings_loaded() -> None:

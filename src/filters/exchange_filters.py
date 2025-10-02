@@ -5,8 +5,8 @@ Critical module to prevent -1013 errors by validating orders against
 exchange rules (tickSize, stepSize, minNotional, etc.)
 """
 
-from decimal import Decimal, ROUND_DOWN
-from typing import Any, Optional
+from decimal import ROUND_DOWN, Decimal
+from typing import Any
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -60,7 +60,7 @@ class ExchangeFilters:
 
         return self._symbol_info_cache[symbol]
 
-    def _get_filter(self, symbol: str, filter_type: str) -> Optional[dict[str, Any]]:
+    def _get_filter(self, symbol: str, filter_type: str) -> dict[str, Any] | None:
         """
         Get specific filter for a symbol.
 
@@ -184,9 +184,9 @@ class ExchangeFilters:
     def validate_order(
         self,
         symbol: str,
-        price: Optional[float] = None,
-        quantity: Optional[float] = None,
-        quote_qty: Optional[float] = None,
+        price: float | None = None,
+        quantity: float | None = None,
+        quote_qty: float | None = None,
     ) -> tuple[bool, str]:
         """
         Validate order parameters against exchange filters.

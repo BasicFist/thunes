@@ -4,17 +4,15 @@ Tracks rolling performance metrics to detect when strategy parameters decay.
 Triggers alerts and re-optimization when performance drops below thresholds.
 """
 
-import json
 from datetime import datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from src.config import ARTIFACTS_DIR
-from src.models.position import Position, PositionTracker
+from src.models.position import PositionTracker
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -60,7 +58,7 @@ class PerformanceTracker:
             f"window={rolling_window_days}d"
         )
 
-    def calculate_rolling_sharpe(self, window_days: Optional[int] = None) -> float:
+    def calculate_rolling_sharpe(self, window_days: int | None = None) -> float:
         """
         Calculate rolling Sharpe ratio from recent closed positions.
 
@@ -77,9 +75,7 @@ class PerformanceTracker:
         positions = self.position_tracker.get_position_history(limit=1000)
 
         # Filter to window
-        recent_positions = [
-            p for p in positions if p.exit_time and p.exit_time >= cutoff_date
-        ]
+        recent_positions = [p for p in positions if p.exit_time and p.exit_time >= cutoff_date]
 
         if len(recent_positions) < 2:
             logger.debug(
@@ -107,7 +103,7 @@ class PerformanceTracker:
 
         return float(sharpe)
 
-    def calculate_win_rate(self, window_days: Optional[int] = None) -> float:
+    def calculate_win_rate(self, window_days: int | None = None) -> float:
         """
         Calculate win rate from recent positions.
 
@@ -121,9 +117,7 @@ class PerformanceTracker:
         cutoff_date = datetime.utcnow() - timedelta(days=window)
 
         positions = self.position_tracker.get_position_history(limit=1000)
-        recent_positions = [
-            p for p in positions if p.exit_time and p.exit_time >= cutoff_date
-        ]
+        recent_positions = [p for p in positions if p.exit_time and p.exit_time >= cutoff_date]
 
         if not recent_positions:
             return 0.0
@@ -133,7 +127,7 @@ class PerformanceTracker:
 
         return win_rate
 
-    def calculate_average_pnl(self, window_days: Optional[int] = None) -> Decimal:
+    def calculate_average_pnl(self, window_days: int | None = None) -> Decimal:
         """
         Calculate average PnL per trade.
 
@@ -147,9 +141,7 @@ class PerformanceTracker:
         cutoff_date = datetime.utcnow() - timedelta(days=window)
 
         positions = self.position_tracker.get_position_history(limit=1000)
-        recent_positions = [
-            p for p in positions if p.exit_time and p.exit_time >= cutoff_date
-        ]
+        recent_positions = [p for p in positions if p.exit_time and p.exit_time >= cutoff_date]
 
         if not recent_positions:
             return Decimal("0.00")
@@ -338,7 +330,10 @@ class PerformanceTracker:
         is_decaying, severity, sharpe = self.detect_decay()
 
         if severity == "CRITICAL":
-            return True, f"Critical performance decay (Sharpe {sharpe:.3f} < {self.critical_threshold})"
+            return (
+                True,
+                f"Critical performance decay (Sharpe {sharpe:.3f} < {self.critical_threshold})",
+            )
 
         # Check trend
         trend = self.get_decay_trend()

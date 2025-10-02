@@ -4,12 +4,11 @@ import tempfile
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import Mock
 
 import pandas as pd
 import pytest
 
-from src.models.position import Position, PositionTracker
+from src.models.position import PositionTracker
 from src.monitoring.performance_tracker import PerformanceTracker
 
 
@@ -55,6 +54,7 @@ def create_winning_position(
 
     # Manually set entry_time for testing
     import sqlite3
+
     with sqlite3.connect(tracker.db_path) as conn:
         conn.execute(
             "UPDATE positions SET entry_time = ? WHERE order_id = ?",
@@ -90,6 +90,7 @@ def create_losing_position(
     )
 
     import sqlite3
+
     with sqlite3.connect(tracker.db_path) as conn:
         conn.execute(
             "UPDATE positions SET entry_time = ? WHERE order_id = ?",
@@ -325,7 +326,9 @@ def test_should_trigger_reoptimization_healthy(position_tracker, performance_tra
         )
         exit_price = 52000 if i % 2 == 0 else 51000
         position_tracker.close_position(
-            symbol="BTCUSDT", exit_price=Decimal(str(exit_price)), exit_order_id=f"trigger_test_exit_{i}"
+            symbol="BTCUSDT",
+            exit_price=Decimal(str(exit_price)),
+            exit_order_id=f"trigger_test_exit_{i}",
         )
 
     should_trigger, reason = performance_tracker.should_trigger_reoptimization()

@@ -58,7 +58,7 @@ def is_server_error(exception: Exception) -> bool:
         return status_code >= 500 or status_code in (429, 418)
 
     # Connection errors, timeout errors
-    if isinstance(exception, (ConnectionError, TimeoutError, OSError)):
+    if isinstance(exception, ConnectionError | TimeoutError | OSError):
         return True
 
     # By default, don't trip the breaker for unknown exceptions

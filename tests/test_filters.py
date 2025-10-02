@@ -1,7 +1,7 @@
 """Tests for exchange filters module."""
 
 from decimal import Decimal
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
 import pytest
 

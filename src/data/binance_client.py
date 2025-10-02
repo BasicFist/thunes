@@ -1,7 +1,5 @@
 """Binance API client wrapper for data fetching."""
 
-from typing import Optional
-
 import pandas as pd
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -47,8 +45,8 @@ class BinanceDataClient:
         self,
         symbol: str,
         interval: str,
-        start_str: Optional[str] = None,
-        end_str: Optional[str] = None,
+        start_str: str | None = None,
+        end_str: str | None = None,
         limit: int = 500,
     ) -> pd.DataFrame:
         """

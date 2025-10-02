@@ -10,7 +10,6 @@ This module implements critical safety features:
 
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from src.config import settings
 from src.models.position import PositionTracker
@@ -23,7 +22,7 @@ logger = setup_logger(__name__)
 class RiskManager:
     """Enforces trading risk limits with kill-switch protection."""
 
-    def __init__(self, position_tracker: Optional[PositionTracker] = None) -> None:
+    def __init__(self, position_tracker: PositionTracker | None = None) -> None:
         """
         Initialize risk manager.
 
@@ -40,8 +39,8 @@ class RiskManager:
 
         # State tracking
         self.kill_switch_active = False
-        self.last_loss_time: Optional[datetime] = None
-        self._daily_loss_cache: Optional[tuple[datetime, Decimal]] = None
+        self.last_loss_time: datetime | None = None
+        self._daily_loss_cache: tuple[datetime, Decimal] | None = None
 
         logger.info(
             f"RiskManager initialized: max_loss_per_trade={self.max_loss_per_trade}, "

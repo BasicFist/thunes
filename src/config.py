@@ -1,6 +1,5 @@
 """Configuration management for THUNES trading system."""
 
-import os
 from pathlib import Path
 from typing import Literal
 

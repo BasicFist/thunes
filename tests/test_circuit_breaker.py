@@ -191,7 +191,7 @@ class TestCircuitBreakerMonitor:
         # Force breaker1 to open
         try:
             breaker1.call(lambda: (_ for _ in ()).throw(Exception("error")))
-        except:
+        except Exception:
             pass
 
         # At least one breaker should be open
@@ -205,7 +205,7 @@ class TestCircuitBreakerMonitor:
         # Force breaker to fail
         try:
             breaker.call(lambda: (_ for _ in ()).throw(Exception("error")))
-        except:
+        except Exception:
             pass
 
         # Reset

@@ -2,8 +2,6 @@
 
 import logging
 import sys
-from pathlib import Path
-from typing import Optional
 
 from pythonjsonlogger import jsonlogger
 
@@ -12,9 +10,9 @@ from src.config import LOGS_DIR, settings
 
 def setup_logger(
     name: str,
-    level: Optional[str] = None,
+    level: str | None = None,
     json_format: bool = False,
-    log_file: Optional[str] = None,
+    log_file: str | None = None,
 ) -> logging.Logger:
     """
     Configure and return a logger instance.

@@ -247,7 +247,7 @@ class TestRateLimitIntegration:
         bucket = TokenBucket(config)
 
         # Burst: consume 10 tokens rapidly
-        for i in range(10):
+        for _i in range(10):
             result = bucket.consume(tokens=1, blocking=False)
             assert result is True
 
