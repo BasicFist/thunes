@@ -299,17 +299,23 @@ class GPUFeatureEngine:
     def _obv(
         self, close: "cudf.Series | pd.Series", volume: "cudf.Series | pd.Series"
     ) -> "cudf.Series | pd.Series":
-        """Calculate On-Balance Volume."""
+        """Calculate On-Balance Volume.
+
+        OBV tracks cumulative volume flow based on price direction:
+        - Price up: add volume
+        - Price down: subtract volume
+        - Price unchanged or NaN: add zero
+        """
         price_diff = close.diff()
-        obv = volume.copy()
 
-        if self.use_gpu:
-            obv[price_diff < 0] = -volume[price_diff < 0]  # type: ignore[operator]
-            obv[price_diff == 0] = 0
-        else:
-            obv = volume.where(price_diff > 0, -volume).where(price_diff != 0, 0)  # type: ignore[operator]
+        # Create direction-adjusted volume (unified for CPU and GPU)
+        obv_direction = volume.copy()
+        obv_direction[price_diff > 0] = volume[price_diff > 0]  # type: ignore[operator]
+        obv_direction[price_diff < 0] = -volume[price_diff < 0]  # type: ignore[operator]
+        obv_direction[price_diff == 0] = 0  # type: ignore[operator]
+        obv_direction[price_diff.isna()] = 0  # First row (no previous price)
 
-        return obv.cumsum()
+        return obv_direction.cumsum()
 
     def _vwap(
         self,
