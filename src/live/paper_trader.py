@@ -1,31 +1,50 @@
-"""Paper trading module for Binance Testnet."""
+"""Paper trading module for Binance Testnet with adaptive parameter management."""
 
 import argparse
+import json
+from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
+from src.backtest.rsi_strategy import RSIStrategy
 from src.backtest.strategy import SMAStrategy
-from src.config import settings
+from src.config import ARTIFACTS_DIR, settings
 from src.data.binance_client import BinanceDataClient
 from src.filters.exchange_filters import ExchangeFilters
 from src.models.position import PositionTracker
+from src.monitoring.performance_tracker import PerformanceTracker
+from src.risk.manager import RiskManager
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__, log_file="paper_trader.log")
 
 
 class PaperTrader:
-    """Execute paper trades on Binance Testnet."""
+    """
+    Execute paper trades on Binance Testnet with adaptive parameter management.
 
-    def __init__(self, testnet: bool = True) -> None:
+    Integrates:
+    - Weekly re-optimization (parameter loading from JSON)
+    - Performance monitoring (decay detection)
+    - Risk management (kill-switch, position limits)
+    """
+
+    def __init__(
+        self,
+        testnet: bool = True,
+        enable_risk_manager: bool = True,
+        enable_performance_tracking: bool = True,
+    ) -> None:
         """
         Initialize paper trader.
 
         Args:
             testnet: If True, use testnet. If False, use production (DANGEROUS)
+            enable_risk_manager: Enable risk management validation
+            enable_performance_tracking: Enable performance decay monitoring
         """
         if not testnet:
             logger.critical("PRODUCTION MODE - REAL MONEY AT RISK!")
@@ -33,6 +52,8 @@ class PaperTrader:
                 raise ValueError("Cannot use production without environment=live")
 
         self.testnet = testnet
+        self.enable_risk_manager = enable_risk_manager
+        self.enable_performance_tracking = enable_performance_tracking
 
         # Initialize clients
         if testnet:
@@ -51,7 +72,81 @@ class PaperTrader:
         self.filters = ExchangeFilters(self.client)
         self.position_tracker = PositionTracker()
 
+        # Risk management
+        if enable_risk_manager:
+            self.risk_manager = RiskManager(position_tracker=self.position_tracker)
+            logger.info("RiskManager enabled")
+
+        # Performance tracking
+        if enable_performance_tracking:
+            self.performance_tracker = PerformanceTracker(
+                position_tracker=self.position_tracker,
+                sharpe_threshold=1.0,
+                critical_threshold=0.5,
+                rolling_window_days=7,
+            )
+            logger.info("PerformanceTracker enabled")
+
+        # Parameter management
+        self.params_file = ARTIFACTS_DIR / "optimize" / "current_parameters.json"
+        self.last_params_load: datetime | None = None
+        self.current_params: dict[str, Any] = {}
+
         logger.info(f"PaperTrader initialized (testnet={testnet})")
+
+    def load_parameters(self) -> dict[str, Any]:
+        """
+        Load current strategy parameters from JSON file.
+
+        Returns:
+            Dict with strategy type and parameters
+        """
+        if not self.params_file.exists():
+            logger.warning(
+                f"Parameters file not found: {self.params_file}. Using industry defaults."
+            )
+            return {
+                "strategy": "RSI",
+                "parameters": {
+                    "rsi_period": 14,
+                    "oversold": 30.0,
+                    "overbought": 70.0,
+                    "stop_loss": 3.0,
+                },
+                "optimized_at": None,
+            }
+
+        with open(self.params_file) as f:
+            data = json.load(f)
+
+        self.last_params_load = datetime.now()
+        logger.info(
+            f"Parameters loaded: {data.get('strategy', 'UNKNOWN')} "
+            f"(optimized {data.get('optimized_at', 'never')})"
+        )
+
+        return data
+
+    def check_parameter_reload(self) -> bool:
+        """
+        Check if parameters file has been updated since last load.
+
+        Returns:
+            True if parameters were reloaded
+        """
+        if not self.params_file.exists():
+            return False
+
+        # Check file modification time
+        file_mtime = datetime.fromtimestamp(self.params_file.stat().st_mtime)
+
+        # Reload if file updated after last load OR if never loaded
+        if self.last_params_load is None or file_mtime > self.last_params_load:
+            logger.info("Parameter file updated - reloading parameters")
+            self.current_params = self.load_parameters()
+            return True
+
+        return False
 
     def get_account_balance(self, asset: str = "USDT") -> float:
         """
@@ -81,7 +176,7 @@ class PaperTrader:
         symbol: str,
         side: str,
         quote_qty: float,
-    ) -> Optional[dict]:
+    ) -> dict[Any, Any] | None:
         """
         Place a market order using quote quantity.
 
@@ -123,31 +218,79 @@ class PaperTrader:
         symbol: str,
         timeframe: str,
         quote_amount: float,
-        fast_window: int = 20,
-        slow_window: int = 50,
+        fast_window: int | None = None,
+        slow_window: int | None = None,
     ) -> None:
         """
         Run strategy and execute trade if signal present.
+
+        Loads parameters from JSON file if available, falls back to CLI args.
+        Integrates risk management and performance tracking.
 
         Args:
             symbol: Trading pair
             timeframe: Candlestick timeframe
             quote_amount: Amount to trade in quote currency
-            fast_window: Fast SMA window
-            slow_window: Slow SMA window
+            fast_window: Fast SMA window (overrides JSON params if provided)
+            slow_window: Slow SMA window (overrides JSON params if provided)
         """
         logger.info(f"Running strategy for {symbol}")
 
+        # Check for parameter updates (hot-reload)
+        self.check_parameter_reload()
+
+        # Load parameters if not already loaded
+        if not self.current_params:
+            self.current_params = self.load_parameters()
+
+        # Extract strategy type and parameters
+        strategy_type = self.current_params.get("strategy", "RSI")
+        params = self.current_params.get("parameters", {})
+
+        # Risk validation BEFORE fetching data
+        if self.enable_risk_manager:
+            is_valid, reason = self.risk_manager.validate_trade(
+                symbol=symbol, quote_qty=quote_amount
+            )
+            if not is_valid:
+                logger.warning(f"Risk check failed: {reason}")
+                return
+
         # Fetch recent data
+        if strategy_type == "SMA":
+            fast = fast_window or params.get("fast_window", 20)
+            slow = slow_window or params.get("slow_window", 50)
+            limit = max(slow + 10, 100)
+        else:  # RSI
+            rsi_period = params.get("rsi_period", 14)
+            limit = max(rsi_period + 50, 100)
+
         df = self.data_client.get_historical_klines(
             symbol=symbol,
             interval=timeframe,
-            limit=max(slow_window + 10, 100),
+            limit=limit,
         )
 
-        # Generate signals
-        strategy = SMAStrategy(fast_window=fast_window, slow_window=slow_window)
-        entries, exits = strategy.generate_signals(df)
+        # Generate signals based on strategy type
+        if strategy_type == "SMA":
+            fast = fast_window or params.get("fast_window", 20)
+            slow = slow_window or params.get("slow_window", 50)
+            strategy = SMAStrategy(fast_window=fast, slow_window=slow)
+            entries, exits = strategy.generate_signals(df)
+            logger.info(f"Using SMA strategy: fast={fast}, slow={slow}")
+        else:  # RSI (default from weekly re-opt)
+            rsi_strategy = RSIStrategy(
+                rsi_period=params.get("rsi_period", 14),
+                oversold_threshold=params.get("oversold", 30.0),
+                overbought_threshold=params.get("overbought", 70.0),
+                stop_loss_pct=params.get("stop_loss", 3.0),
+            )
+            entries, exits = rsi_strategy.generate_signals(df)
+            logger.info(
+                f"Using RSI strategy: period={params.get('rsi_period', 14)}, "
+                f"oversold={params.get('oversold', 30.0)}, "
+                f"overbought={params.get('overbought', 70.0)}"
+            )
 
         # Check latest signal
         latest_entry = entries.iloc[-1]
@@ -211,6 +354,39 @@ class PaperTrader:
 
         else:
             logger.info("No signal - no trade")
+
+        # Performance monitoring (if enabled)
+        if self.enable_performance_tracking:
+            self._monitor_performance()
+
+    def _monitor_performance(self) -> None:
+        """
+        Monitor performance and check for decay.
+
+        Logs performance snapshot and checks if re-optimization needed.
+        """
+        metrics = self.performance_tracker.get_performance_metrics()
+
+        logger.info(
+            f"Performance: Sharpe(7d)={metrics['rolling_sharpe']['7d']:.2f}, "
+            f"WinRate={metrics['win_rate_7d']:.1f}%, "
+            f"AvgPnL={metrics['avg_pnl_7d']:.2f}"
+        )
+
+        # Check for decay
+        is_decaying, severity, sharpe = self.performance_tracker.detect_decay()
+
+        if is_decaying:
+            logger.warning(f"⚠️ Performance decay detected: {severity} (Sharpe={sharpe:.2f})")
+
+            # Check if immediate re-optimization needed
+            should_trigger, reason = self.performance_tracker.should_trigger_reoptimization()
+            if should_trigger:
+                logger.critical(f"🚨 RE-OPTIMIZATION REQUIRED: {reason}")
+                # TODO: Trigger Telegram alert (Phase 2.1)
+
+        # Log snapshot every run
+        self.performance_tracker.log_performance_snapshot()
 
 
 def main() -> None:
