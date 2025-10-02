@@ -25,6 +25,7 @@ class BinanceDataClient:
         self.testnet = testnet
 
         if testnet:
+            # Testnet requires API keys
             self.client = Client(
                 api_key=settings.binance_testnet_api_key,
                 api_secret=settings.binance_testnet_api_secret,
@@ -32,11 +33,15 @@ class BinanceDataClient:
             )
             logger.info("Initialized Binance TESTNET client")
         else:
-            self.client = Client(
-                api_key=settings.binance_api_key,
-                api_secret=settings.binance_api_secret,
-            )
-            logger.warning("Initialized Binance PRODUCTION client")
+            # Production - use empty keys for public endpoints (historical data)
+            # API keys only needed for private endpoints (account info, orders)
+            api_key = settings.binance_api_key if settings.binance_api_key else ""
+            api_secret = settings.binance_api_secret if settings.binance_api_secret else ""
+            self.client = Client(api_key=api_key, api_secret=api_secret)
+            if api_key:
+                logger.warning("Initialized Binance PRODUCTION client with API keys")
+            else:
+                logger.info("Initialized Binance PRODUCTION client (public endpoints only)")
 
     def get_historical_klines(
         self,
