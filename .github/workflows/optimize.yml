@@ -1,0 +1,48 @@
+name: Optimize
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      trials:
+        description: 'Number of Optuna trials'
+        required: true
+        default: '50'
+      timeout:
+        description: 'Timeout in seconds'
+        required: true
+        default: '600'
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run optimization
+        env:
+          BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
+          BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
+          TZ: ${{ vars.TZ || 'Europe/Paris' }}
+        run: |
+          python -m src.optimize.run_optuna \
+            --trials ${{ github.event.inputs.trials }} \
+            --timeout ${{ github.event.inputs.timeout }}
+
+      - name: Upload optimization artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: optuna-study-${{ github.run_number }}
+          path: artifacts/optuna/*.csv
+          retention-days: 90

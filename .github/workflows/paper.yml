@@ -1,0 +1,47 @@
+name: Paper Trading
+
+on:
+  workflow_dispatch:  # Manual trigger
+  schedule:
+    - cron: '*/10 * * * *'  # Every 10 minutes (staging)
+
+jobs:
+  paper-trade:
+    runs-on: ubuntu-latest
+    environment: staging  # Requires manual approval
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run paper trading
+        env:
+          BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
+          BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TZ: ${{ vars.TZ || 'Europe/Paris' }}
+          ENVIRONMENT: testnet
+        run: |
+          python -m src.live.paper_trader \
+            --symbol BTCUSDT \
+            --quote 10 \
+            --tf 1h
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-logs-${{ github.run_number }}
+          path: logs/*.log
+          retention-days: 7
