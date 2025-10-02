@@ -1,0 +1,60 @@
+# GPU-Accelerated ML/AI Libraries for THUNES
+# Hardware Target: NVIDIA Quadro RTX 5000 (16GB VRAM) + CUDA 12.9
+# Environment: conda env 'thunes' with Python 3.12
+# Installation Guide: See docs/GPU-SETUP.md
+
+# === INSTALLATION STEPS ===
+# 1. Create conda environment:
+#    conda create -n thunes python=3.12 -y
+#    conda activate thunes
+#
+# 2. Install RAPIDS (GPU pandas/numpy):
+#    conda install -c rapidsai -c conda-forge -c nvidia \
+#        cudf=25.08.00 cuml=25.08.00 python=3.12 -y
+#
+# 3. Install PyTorch with CUDA:
+#    pip install --index-url https://download.pytorch.org/whl/cu124 \
+#        torch==2.6.0+cu124 torchvision==0.21.0+cu124
+#
+# 4. Install base THUNES dependencies:
+#    make install
+#
+# 5. Install GPU ML libraries (this file):
+#    pip install -r requirements-gpu.txt
+
+# Deep Learning Framework
+# (Installed separately via --index-url, listed here for reference)
+# torch==2.6.0+cu124
+# torchvision==0.21.0+cu124
+
+# PyTorch Ecosystem
+pytorch-lightning==2.4.0
+pytorch-forecasting==1.4.0  # Temporal Fusion Transformer
+
+# Reinforcement Learning
+stable-baselines3==2.2.1  # PPO, DQN algorithms
+gymnasium==0.29.1  # OpenAI Gym fork
+
+# GPU-Accelerated Gradient Boosting
+xgboost==2.0.3  # Use tree_method='gpu_hist'
+lightgbm==4.3.0  # Use device='gpu'
+
+# Model Interpretation
+shap==0.44.1
+
+# ML Utilities
+imbalanced-learn==0.12.0  # SMOTE, etc.
+einops==0.7.0  # Tensor operations
+
+# === VERIFIED COMPONENTS ===
+# ✅ PyTorch 2.6.0 + CUDA 12.4
+# ✅ cuDF 25.08.00 (GPU pandas - 100x speedup)
+# ✅ XGBoost 2.0.3 (GPU support)
+# ✅ LightGBM 4.3.0 (GPU support)
+# ✅ VRAM: 15.6 GB available
+# ⚠️ cuML conflicts with PyTorch cuBLAS (use cuDF + XGBoost/LightGBM instead)
+
+# === OMITTED PACKAGES ===
+# learn2learn==0.2.0  # Build issues with Python 3.12 (meta-learning Tier 3 only)
+# matplotlib/seaborn  # Already in base requirements.txt
+# tqdm  # Already in base requirements.txt
