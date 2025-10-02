@@ -3,7 +3,6 @@
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -45,12 +44,12 @@ class OrderRequest(BaseModel):
     symbol: str = Field(..., min_length=1, description="Trading pair (e.g., BTCUSDT)")
     side: OrderSide = Field(..., description="Order side (BUY or SELL)")
     order_type: OrderType = Field(..., description="Order type")
-    quantity: Optional[Decimal] = Field(None, gt=0, description="Order quantity in base currency")
-    quote_quantity: Optional[Decimal] = Field(
+    quantity: Decimal | None = Field(None, gt=0, description="Order quantity in base currency")
+    quote_quantity: Decimal | None = Field(
         None, gt=0, description="Order quantity in quote currency"
     )
-    price: Optional[Decimal] = Field(None, gt=0, description="Limit price")
-    stop_price: Optional[Decimal] = Field(None, gt=0, description="Stop trigger price")
+    price: Decimal | None = Field(None, gt=0, description="Limit price")
+    stop_price: Decimal | None = Field(None, gt=0, description="Stop trigger price")
 
     @field_validator("symbol")
     @classmethod
@@ -64,7 +63,7 @@ class OrderRequest(BaseModel):
 
     @field_validator("quantity", "quote_quantity", "price", "stop_price", mode="before")
     @classmethod
-    def validate_positive_decimal(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+    def validate_positive_decimal(cls, v: Decimal | None) -> Decimal | None:
         """Ensure decimal values are positive if provided."""
         if v is not None and v <= 0:
             raise ValueError("Value must be positive")
@@ -95,11 +94,11 @@ class OrderResponse(BaseModel):
     quantity: Decimal = Field(..., gt=0, description="Ordered quantity")
     executed_qty: Decimal = Field(..., ge=0, description="Executed quantity")
     cumulative_quote_qty: Decimal = Field(..., ge=0, description="Cumulative quote quantity")
-    price: Optional[Decimal] = Field(None, description="Order price")
+    price: Decimal | None = Field(None, description="Order price")
     transact_time: datetime = Field(..., description="Transaction timestamp")
 
     @property
-    def average_fill_price(self) -> Optional[Decimal]:
+    def average_fill_price(self) -> Decimal | None:
         """Calculate average fill price."""
         if self.executed_qty > 0 and self.cumulative_quote_qty > 0:
             return self.cumulative_quote_qty / self.executed_qty
@@ -127,9 +126,9 @@ class PositionModel(BaseModel):
     quantity: Decimal = Field(..., gt=0, description="Position size")
     entry_price: Decimal = Field(..., gt=0, description="Entry price")
     entry_time: datetime = Field(..., description="Entry timestamp")
-    exit_price: Optional[Decimal] = Field(None, gt=0, description="Exit price")
-    exit_time: Optional[datetime] = Field(None, description="Exit timestamp")
-    pnl: Optional[Decimal] = Field(None, description="Realized PnL")
+    exit_price: Decimal | None = Field(None, gt=0, description="Exit price")
+    exit_time: datetime | None = Field(None, description="Exit timestamp")
+    pnl: Decimal | None = Field(None, description="Realized PnL")
     status: str = Field(..., description="Position status (OPEN or CLOSED)")
 
     @field_validator("status")

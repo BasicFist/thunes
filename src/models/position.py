@@ -4,7 +4,6 @@ import sqlite3
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 
 from src.utils.logger import setup_logger
 
@@ -21,10 +20,10 @@ class Position:
         entry_price: Decimal,
         entry_time: datetime,
         order_id: str,
-        position_id: Optional[int] = None,
-        exit_price: Optional[Decimal] = None,
-        exit_time: Optional[datetime] = None,
-        pnl: Optional[Decimal] = None,
+        position_id: int | None = None,
+        exit_price: Decimal | None = None,
+        exit_time: datetime | None = None,
+        pnl: Decimal | None = None,
         status: str = "OPEN",
     ) -> None:
         """Initialize position."""
@@ -154,7 +153,7 @@ class PositionTracker:
         symbol: str,
         exit_price: Decimal,
         exit_order_id: str,
-    ) -> Optional[Position]:
+    ) -> Position | None:
         """
         Close an open position.
 
@@ -198,7 +197,7 @@ class PositionTracker:
         logger.info(f"Closed position: {position} | PnL: {pnl:.2f}")
         return position
 
-    def get_open_position(self, symbol: str) -> Optional[Position]:
+    def get_open_position(self, symbol: str) -> Position | None:
         """
         Get open position for symbol.
 
@@ -285,7 +284,7 @@ class PositionTracker:
 
         return count > 0
 
-    def calculate_unrealized_pnl(self, symbol: str, current_price: Decimal) -> Optional[Decimal]:
+    def calculate_unrealized_pnl(self, symbol: str, current_price: Decimal) -> Decimal | None:
         """
         Calculate unrealized PnL for open position.
 
@@ -320,7 +319,7 @@ class PositionTracker:
         return Decimal(str(total))
 
     def get_position_history(
-        self, symbol: Optional[str] = None, limit: int = 100
+        self, symbol: str | None = None, limit: int = 100
     ) -> list[Position]:
         """
         Get position history (closed positions).

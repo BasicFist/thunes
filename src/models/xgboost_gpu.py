@@ -297,7 +297,7 @@ class XGBoostGPUModel:
             y_test_array = y_test
 
         predictions = self.predict(X_test)
-        probabilities = self.predict_proba(X_test)
+        self.predict_proba(X_test)
 
         metrics = {
             "test_accuracy": accuracy_score(y_test_array, predictions),
