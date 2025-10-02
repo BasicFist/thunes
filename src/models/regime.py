@@ -4,7 +4,6 @@ Based on IMPLEMENTATION-ROADMAP.md Tier 1 recommendation (6 hours, ⭐⭐⭐⭐)
 HMM outperforms clustering for regime detection (2024-2025 research).
 """
 
-
 import numpy as np
 import pandas as pd
 from hmmlearn.hmm import GaussianHMM

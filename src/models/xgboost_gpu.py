@@ -168,9 +168,7 @@ class XGBoostGPUModel:
             y_train_array = y_train
 
         # Create DMatrix for training
-        dtrain = xgb.DMatrix(
-            X_train_array, label=y_train_array, feature_names=self.feature_names
-        )
+        dtrain = xgb.DMatrix(X_train_array, label=y_train_array, feature_names=self.feature_names)
 
         # Setup evaluation sets
         evals = [(dtrain, "train")]
@@ -185,9 +183,7 @@ class XGBoostGPUModel:
             else:
                 y_val_array = y_val
 
-            dval = xgb.DMatrix(
-                X_val_array, label=y_val_array, feature_names=self.feature_names
-            )
+            dval = xgb.DMatrix(X_val_array, label=y_val_array, feature_names=self.feature_names)
             evals.append((dval, "validation"))
 
         # Train model
@@ -206,7 +202,11 @@ class XGBoostGPUModel:
             verbose_eval=10 if verbose else False,
         )
 
-        self.best_iteration = self.model.best_iteration if hasattr(self.model, "best_iteration") else self.n_estimators
+        self.best_iteration = (
+            self.model.best_iteration
+            if hasattr(self.model, "best_iteration")
+            else self.n_estimators
+        )
 
         # Calculate training metrics
         train_pred = (self.model.predict(dtrain) > 0.5).astype(int)
@@ -384,7 +384,9 @@ class XGBoostGPUModel:
         }
 
         for fold, (train_idx, test_idx) in enumerate(tscv.split(X), 1):
-            logger.info(f"Fold {fold}/{n_splits}: Train size={len(train_idx)}, Test size={len(test_idx)}")
+            logger.info(
+                f"Fold {fold}/{n_splits}: Train size={len(train_idx)}, Test size={len(test_idx)}"
+            )
 
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]

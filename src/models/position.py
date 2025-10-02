@@ -318,9 +318,7 @@ class PositionTracker:
 
         return Decimal(str(total))
 
-    def get_position_history(
-        self, symbol: str | None = None, limit: int = 100
-    ) -> list[Position]:
+    def get_position_history(self, symbol: str | None = None, limit: int = 100) -> list[Position]:
         """
         Get position history (closed positions).
 
