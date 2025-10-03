@@ -58,14 +58,13 @@ class OptunaOptimizer:
             "1d": 24,
             "1w": 24 * 7,
         }
-        hours_per_candle = timeframe_hours.get(timeframe, 1)
-        required_klines = int((lookback_days * 24) / hours_per_candle)
+        # Note: No longer need to calculate required_klines - auto-pagination fetches all data
 
         self.df = client.get_historical_klines(
             symbol=symbol,
             interval=timeframe,
             start_str=f"{lookback_days} days ago UTC",
-            limit=min(required_klines + 100, 1000),  # Binance max is 1000
+            limit=None,  # Auto-paginate to fetch all requested data
         )
         logger.info(
             f"Data loaded: {len(self.df)} candles from {self.df.index[0]} to {self.df.index[-1]}"

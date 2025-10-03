@@ -370,12 +370,26 @@ class PaperTrader:
                     avg_exit_price = cum_quote / executed_qty
 
                     # Close position
-                    self.position_tracker.close_position(
+                    closed_position = self.position_tracker.close_position(
                         symbol=symbol,
                         exit_price=avg_exit_price,
                         exit_order_id=str(response["orderId"]),
                     )
-                    logger.info(f"Position closed @ {avg_exit_price}")
+                    logger.info(
+                        f"Position closed @ {avg_exit_price} | PnL: {closed_position.pnl:.2f}"
+                    )
+
+                    # Update risk manager with win/loss for cooldown tracking
+                    if closed_position.pnl < 0:
+                        self.risk_manager.record_loss()
+                        logger.warning(
+                            f"Loss recorded: {closed_position.pnl:.2f} USDT - cooldown activated for {self.risk_manager.cool_down_minutes} min"
+                        )
+                    else:
+                        self.risk_manager.record_win()
+                        logger.info(
+                            f"Win recorded: {closed_position.pnl:.2f} USDT - cooldown cleared"
+                        )
 
         elif latest_entry and has_position:
             logger.info("Entry signal detected but position already open - skipping")

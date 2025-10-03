@@ -151,29 +151,26 @@ class TradingScheduler:
             # Get position tracker
             tracker = self.paper_trader.position_tracker
 
-            # Calculate daily stats
-            closed_positions = tracker.get_closed_positions()
-            if closed_positions:
-                # Filter to today's trades (last 24 hours)
-                from datetime import timedelta
+            # Calculate daily stats using position_history (includes closed positions)
+            all_positions = tracker.get_position_history(symbol=None, limit=100)
 
-                yesterday = datetime.now() - timedelta(days=1)
-                today_trades = [
-                    p for p in closed_positions if p.exit_time and p.exit_time > yesterday
-                ]
+            # Filter to closed positions from last 24 hours
+            from datetime import timedelta
 
-                if today_trades:
-                    daily_pnl = sum(p.pnl for p in today_trades)
-                    wins = [p for p in today_trades if p.pnl > 0]
-                    win_rate = len(wins) / len(today_trades) * 100 if today_trades else 0
-                else:
-                    daily_pnl = 0.0
-                    win_rate = 0.0
-                    today_trades = []
+            yesterday = datetime.now() - timedelta(days=1)
+            today_trades = [
+                p
+                for p in all_positions
+                if p.status == "CLOSED" and p.exit_time and p.exit_time > yesterday
+            ]
+
+            if today_trades:
+                daily_pnl = sum(p.pnl for p in today_trades)
+                wins = [p for p in today_trades if p.pnl > 0]
+                win_rate = len(wins) / len(today_trades) * 100 if today_trades else 0
             else:
                 daily_pnl = 0.0
                 win_rate = 0.0
-                today_trades = []
 
             # Get risk status
             risk_status = self.paper_trader.risk_manager.get_risk_status()
@@ -192,11 +189,10 @@ Win Rate: {win_rate:.1f}%
 
 🎯 **Risk Status**
 Open Positions: {risk_status['open_positions']}/{risk_status['max_positions']}
-Daily Loss: {risk_status['daily_pnl']:.2f} / {risk_status['max_daily_loss']:.2f} USDT
+Daily PnL: {risk_status['daily_pnl']:.2f} USDT (Limit: {risk_status['daily_loss_limit']:.2f})
 Kill-Switch: {'🔴 ACTIVE' if risk_status['kill_switch_active'] else '🟢 OK'}
 
 🔌 **System Health**
-WebSocket: {'🟢 Connected' if self.paper_trader.ws_stream and self.paper_trader.ws_stream.is_connected() else '🔴 Disconnected'}
 Circuit Breaker: {'🟢 Closed' if not circuit_monitor.is_open('BinanceAPI') else '🔴 Open'}
 """
 

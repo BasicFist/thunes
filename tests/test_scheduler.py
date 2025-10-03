@@ -236,16 +236,15 @@ class TestTradingScheduler:
 
         # Mock PaperTrader with minimal data
         mock_trader = MagicMock()
-        mock_trader.position_tracker.get_closed_positions.return_value = []
-        mock_trader.position_tracker.get_open_positions.return_value = []
+        mock_trader.position_tracker.get_position_history.return_value = []
+        mock_trader.position_tracker.get_all_open_positions.return_value = []
         mock_trader.risk_manager.get_risk_status.return_value = {
             "open_positions": 0,
             "max_positions": 3,
             "daily_pnl": 0.0,
-            "max_daily_loss": 20.0,
+            "daily_loss_limit": -20.0,
             "kill_switch_active": False,
         }
-        mock_trader.ws_stream = None  # No WebSocket
         mock_paper_trader_class.return_value = mock_trader
 
         # Create scheduler with mocked Telegram

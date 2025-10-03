@@ -64,8 +64,7 @@ def run_backtest(
         "1d": 24,
         "1w": 24 * 7,
     }
-    hours_per_candle = timeframe_hours.get(timeframe, 1)
-    required_klines = int((lookback_days * 24) / hours_per_candle)
+    # Note: No longer need to calculate required_klines - auto-pagination fetches all data
 
     # Use production Binance for historical data (public endpoint, no auth required)
     client = BinanceDataClient(testnet=False)
@@ -73,7 +72,7 @@ def run_backtest(
         symbol=symbol,
         interval=timeframe,
         start_str=f"{lookback_days} days ago UTC",
-        limit=min(required_klines + 100, 1000),  # Binance max is 1000, add buffer
+        limit=None,  # Auto-paginate to fetch all requested data
     )
 
     logger.info(f"Data fetched: {len(df)} candles from {df.index[0]} to {df.index[-1]}")

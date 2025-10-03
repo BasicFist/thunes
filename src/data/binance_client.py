@@ -47,29 +47,44 @@ class BinanceDataClient:
         interval: str,
         start_str: str | None = None,
         end_str: str | None = None,
-        limit: int = 500,
+        limit: int | None = None,
     ) -> pd.DataFrame:
         """
-        Fetch historical klines (candlestick) data.
+        Fetch historical klines (candlestick) data with automatic pagination.
 
         Args:
             symbol: Trading pair (e.g., "BTCUSDT")
             interval: Kline interval (e.g., "1h", "4h", "1d")
-            start_str: Start date string (e.g., "1 Jan, 2024")
+            start_str: Start date string (e.g., "1 Jan, 2024" or "90 days ago UTC")
             end_str: End date string (optional)
-            limit: Number of klines to fetch (max 1000)
+            limit: Number of klines to fetch (None = fetch all available, auto-paginates)
 
         Returns:
             DataFrame with OHLCV data
+
+        Note:
+            Binance has a 1000 candle limit per request. If limit > 1000 or limit=None,
+            this method automatically paginates to fetch all requested data.
         """
         try:
-            klines = self.client.get_historical_klines(
-                symbol=symbol,
-                interval=interval,
-                start_str=start_str,
-                end_str=end_str,
-                limit=limit,
-            )
+            # If limit is None or > 1000, use python-binance's automatic pagination
+            # by NOT passing a limit parameter (fetches all data between start_str and end_str)
+            if limit is None or limit > 1000:
+                klines = self.client.get_historical_klines(
+                    symbol=symbol,
+                    interval=interval,
+                    start_str=start_str,
+                    end_str=end_str,
+                    # No limit parameter = fetch all
+                )
+            else:
+                klines = self.client.get_historical_klines(
+                    symbol=symbol,
+                    interval=interval,
+                    start_str=start_str,
+                    end_str=end_str,
+                    limit=limit,
+                )
 
             df = pd.DataFrame(
                 klines,
