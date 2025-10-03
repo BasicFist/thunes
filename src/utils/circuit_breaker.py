@@ -198,13 +198,8 @@ class CircuitBreakerMonitor:
         if breaker is None:
             return False  # Breaker doesn't exist - assume closed
 
-        # Check state - pybreaker uses state names
-        state_str = (
-            breaker.current_state
-            if isinstance(breaker.current_state, str)
-            else str(breaker.current_state)
-        )
-        return "open" in state_str.lower()
+        # Direct enum comparison (same pattern as is_any_open)
+        return breaker.current_state == pybreaker.STATE_OPEN
 
     def get_status(self) -> dict[str, dict]:
         """

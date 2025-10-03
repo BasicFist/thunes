@@ -25,6 +25,7 @@ class Position:
         exit_time: datetime | None = None,
         pnl: Decimal | None = None,
         status: str = "OPEN",
+        exit_order_id: str | None = None,
     ) -> None:
         """Initialize position."""
         self.id = position_id
@@ -37,6 +38,7 @@ class Position:
         self.pnl = pnl
         self.status = status
         self.order_id = order_id
+        self.exit_order_id = exit_order_id
 
     def __repr__(self) -> str:
         """String representation."""
@@ -83,6 +85,16 @@ class PositionTracker:
                 )
                 """
             )
+
+            # Migration: Add exit_order_id column if it doesn't exist
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(positions)")
+            columns = {col[1] for col in cursor.fetchall()}
+
+            if "exit_order_id" not in columns:
+                conn.execute("ALTER TABLE positions ADD COLUMN exit_order_id TEXT")
+                logger.info("Added exit_order_id column to positions table")
+
             # Index for fast lookups
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_symbol_status " "ON positions(symbol, status)"
@@ -182,16 +194,17 @@ class PositionTracker:
             conn.execute(
                 """
                 UPDATE positions
-                SET exit_price = ?, exit_time = ?, pnl = ?, status = 'CLOSED'
+                SET exit_price = ?, exit_time = ?, pnl = ?, exit_order_id = ?, status = 'CLOSED'
                 WHERE id = ?
                 """,
-                (float(exit_price), exit_time.isoformat(), float(pnl), position.id),
+                (float(exit_price), exit_time.isoformat(), float(pnl), exit_order_id, position.id),
             )
             conn.commit()
 
         position.exit_price = exit_price
         position.exit_time = exit_time
         position.pnl = pnl
+        position.exit_order_id = exit_order_id
         position.status = "CLOSED"
 
         logger.info(f"Closed position: {position} | PnL: {pnl:.2f}")
@@ -371,6 +384,7 @@ class PositionTracker:
                     pnl=Decimal(str(row["pnl"])) if row["pnl"] else None,
                     status=row["status"],
                     order_id=row["order_id"],
+                    exit_order_id=row.get("exit_order_id"),  # Safely get exit_order_id
                 )
             )
 

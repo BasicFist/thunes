@@ -215,8 +215,11 @@ class TestCircuitBreakerMonitor:
         except Exception:
             pass
 
-        # At least one breaker should be open
-        # (Note: The circuit might not open immediately, so we just test the logic)
+        # Verify breaker reports as open (regression test for state comparison bug)
+        assert monitor.is_any_open() is True, "is_any_open() should return True after failure"
+        assert (
+            monitor.is_open("Breaker1") is True
+        ), "is_open() should return True for failed breaker"
 
     def test_reset_all(self) -> None:
         """Test resetting all breakers."""

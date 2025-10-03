@@ -264,29 +264,6 @@ class PaperTrader:
         strategy_type = self.current_params.get("strategy", "RSI")
         params = self.current_params.get("parameters", {})
 
-        # Risk validation BEFORE fetching data
-        if self.enable_risk_manager:
-            is_valid, reason = self.risk_manager.validate_trade(
-                symbol=symbol, quote_qty=quote_amount
-            )
-            if not is_valid:
-                logger.warning(f"Risk check failed: {reason}")
-
-                # Send Telegram kill-switch alert if daily loss limit exceeded
-                if "KILL-SWITCH" in reason and self.enable_telegram and self.telegram.enabled:
-                    daily_loss = self.risk_manager.get_daily_pnl()
-                    self.telegram.send_message_sync(
-                        "🚨 *KILL-SWITCH TRIGGERED* 🚨\n\n"
-                        "*Daily Loss Limit Exceeded*\n"
-                        f"Current Loss: `{daily_loss:.2f} USDT`\n"
-                        f"Limit: `{self.risk_manager.max_daily_loss:.2f} USDT`\n\n"
-                        "⛔ *TRADING HALTED* ⛔\n"
-                        f"Time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n\n"
-                        "Action Required: Review logs and adjust strategy parameters"
-                    )
-
-                return
-
         # Fetch recent data
         if strategy_type == "SMA":
             fast = fast_window or params.get("fast_window", 20)
@@ -331,7 +308,31 @@ class PaperTrader:
         has_position = self.position_tracker.has_open_position(symbol)
 
         if latest_entry and not has_position:
-            logger.info("Entry signal detected - placing BUY order")
+            logger.info("Entry signal detected - validating BUY order")
+
+            # Validate BUY order with risk manager
+            if self.enable_risk_manager:
+                is_valid, reason = self.risk_manager.validate_trade(
+                    symbol=symbol, quote_qty=quote_amount, side="BUY"
+                )
+                if not is_valid:
+                    logger.warning(f"Entry rejected by risk manager: {reason}")
+
+                    # Send Telegram kill-switch alert if daily loss limit exceeded
+                    if "KILL-SWITCH" in reason and self.enable_telegram and self.telegram.enabled:
+                        daily_loss = self.risk_manager.get_daily_pnl()
+                        self.telegram.send_message_sync(
+                            "🚨 *KILL-SWITCH TRIGGERED* 🚨\n\n"
+                            "*Daily Loss Limit Exceeded*\n"
+                            f"Current Loss: `{daily_loss:.2f} USDT`\n"
+                            f"Limit: `{self.risk_manager.max_daily_loss:.2f} USDT`\n\n"
+                            "⛔ *NEW POSITIONS BLOCKED* ⛔\n"
+                            f"Time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n\n"
+                            "Note: Existing positions can still be exited"
+                        )
+                    return
+
+            logger.info("BUY order approved - placing order")
             response = self.place_market_order(symbol, "BUY", quote_amount)
 
             if response and response.get("status") == "FILLED":
@@ -350,18 +351,27 @@ class PaperTrader:
                 logger.info(f"Position opened: {executed_qty} @ {avg_price}")
 
         elif latest_exit and has_position:
-            logger.info("Exit signal detected - placing SELL order")
+            logger.info("Exit signal detected - validating SELL order")
+
+            # Validate SELL order (should pass kill-switch, cool-down; may fail circuit breaker)
+            if self.enable_risk_manager:
+                is_valid, reason = self.risk_manager.validate_trade(
+                    symbol=symbol, quote_qty=0.0, side="SELL"  # Not used for SELL validation
+                )
+                if not is_valid:
+                    logger.warning(f"Exit rejected by risk manager: {reason}")
+                    return
+
             position = self.position_tracker.get_open_position(symbol)
 
             if position:
-                # Sell the entire position
-                # For market SELL, we need to specify quantity in base currency
-                response = self.client.create_order(
+                # Sell the entire position (with exchange filter validation)
+                logger.info("SELL order approved - preparing order")
+                order_params = self.filters.prepare_market_sell(
                     symbol=symbol,
-                    side="SELL",
-                    type="MARKET",
                     quantity=float(position.quantity),
                 )
+                response = self.client.create_order(**order_params)
 
                 if response and response.get("status") == "FILLED":
                     # Calculate average exit price

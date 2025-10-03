@@ -258,3 +258,52 @@ class ExchangeFilters:
 
         logger.info(f"Prepared market order: {order_params}")
         return order_params
+
+    def prepare_market_sell(
+        self,
+        symbol: str,
+        quantity: float,
+    ) -> dict[str, Any]:
+        """
+        Prepare validated SELL order with base quantity.
+
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            quantity: Amount in base currency (e.g., BTC)
+
+        Returns:
+            Dictionary with order parameters
+
+        Raises:
+            ValueError: If quantity violates stepSize or minimum notional
+        """
+        # Round quantity to stepSize
+        rounded_qty = self.round_quantity(symbol, quantity)
+
+        # Validate minimum notional (price * qty > min)
+        # Note: For SELL we need current price to check notional
+        try:
+            ticker = self.client.get_symbol_ticker(symbol=symbol)
+            price = Decimal(ticker["price"])
+            notional = price * rounded_qty
+            min_notional = self.get_min_notional(symbol)
+
+            if notional < min_notional:
+                raise ValueError(
+                    f"Notional {notional:.2f} below minimum {min_notional:.2f} "
+                    f"(price={price}, qty={rounded_qty})"
+                )
+
+        except BinanceAPIException as e:
+            logger.error(f"Failed to validate SELL order: {e}")
+            raise
+
+        order_params = {
+            "symbol": symbol,
+            "side": "SELL",
+            "type": "MARKET",
+            "quantity": str(rounded_qty),
+        }
+
+        logger.info(f"Prepared SELL order: {order_params}")
+        return order_params

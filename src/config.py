@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     default_quote_amount: float = Field(default=10.0)
 
     # Risk Management
-    max_loss_per_trade: float = Field(default=5.0)
+    max_loss_per_trade: float = Field(default=15.0)  # Increased to accommodate default_quote_amount
     max_daily_loss: float = Field(default=20.0)
     max_positions: int = Field(default=3)
     cool_down_minutes: int = Field(default=60)

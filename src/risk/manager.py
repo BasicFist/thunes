@@ -84,8 +84,8 @@ class RiskManager:
         Returns:
             Tuple of (is_valid, reason_message)
         """
-        # 1. Check kill-switch
-        if self.kill_switch_active:
+        # 1. Check kill-switch (allow SELLs to exit positions, block only BUYs)
+        if self.kill_switch_active and side == "BUY":
             self._write_audit_log(
                 event="TRADE_REJECTED",
                 details={
@@ -96,7 +96,7 @@ class RiskManager:
                     "strategy_id": strategy_id,
                 },
             )
-            return False, "🛑 KILL-SWITCH ACTIVE: Trading halted due to max daily loss"
+            return False, "🛑 KILL-SWITCH ACTIVE: New positions blocked (exits allowed)"
 
         # 2. Check daily loss limit
         daily_loss = self.get_daily_pnl()

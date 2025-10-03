@@ -386,6 +386,26 @@ class TestAuditTrail:
             assert "event" in entry
             assert "timestamp" in entry
 
+    def test_kill_switch_allows_sell_orders(self, risk_manager: RiskManager) -> None:
+        """Test that kill-switch blocks BUY but allows SELL orders to exit positions."""
+        # Activate kill-switch
+        with patch("src.alerts.telegram.TelegramBot"):
+            risk_manager.activate_kill_switch(reason="Test: Daily loss limit")
+
+        # SELL order should pass validation (exit allowed)
+        is_valid, msg = risk_manager.validate_trade(
+            symbol="BTCUSDT", quote_qty=10.0, side="SELL", strategy_id="test_exit"
+        )
+        assert is_valid is True, f"SELL should pass under kill-switch, got: {msg}"
+
+        # BUY order should fail validation (new positions blocked)
+        is_valid, msg = risk_manager.validate_trade(
+            symbol="BTCUSDT", quote_qty=10.0, side="BUY", strategy_id="test_entry"
+        )
+        assert is_valid is False, "BUY should fail under kill-switch"
+        assert "KILL-SWITCH ACTIVE" in msg
+        assert "exits allowed" in msg
+
 
 class TestTelegramIntegration:
     """Tests for Telegram alert integration."""
