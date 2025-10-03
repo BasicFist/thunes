@@ -112,6 +112,17 @@ class RiskManager:
         if side == "BUY":
             quote_decimal = Decimal(str(quote_qty))
             if quote_decimal > self.max_loss_per_trade:
+                self._write_audit_log(
+                    event="TRADE_REJECTED",
+                    details={
+                        "reason": "per_trade_loss_limit_exceeded",
+                        "symbol": symbol,
+                        "side": side,
+                        "quote_qty": quote_qty,
+                        "strategy_id": strategy_id,
+                        "max_loss_per_trade": float(self.max_loss_per_trade),
+                    },
+                )
                 return (
                     False,
                     f"❌ Trade size {quote_qty:.2f} exceeds max loss per trade {self.max_loss_per_trade}",
@@ -121,6 +132,18 @@ class RiskManager:
         if side == "BUY":
             open_positions = self.position_tracker.get_all_open_positions()
             if len(open_positions) >= self.max_positions:
+                self._write_audit_log(
+                    event="TRADE_REJECTED",
+                    details={
+                        "reason": "max_position_limit_reached",
+                        "symbol": symbol,
+                        "side": side,
+                        "quote_qty": quote_qty,
+                        "strategy_id": strategy_id,
+                        "open_positions": len(open_positions),
+                        "max_positions": self.max_positions,
+                    },
+                )
                 return (
                     False,
                     f"❌ Max position limit reached ({len(open_positions)}/{self.max_positions})",
@@ -129,6 +152,16 @@ class RiskManager:
         # 5. Check if position already exists for symbol (for BUY orders)
         if side == "BUY":
             if self.position_tracker.has_open_position(symbol):
+                self._write_audit_log(
+                    event="TRADE_REJECTED",
+                    details={
+                        "reason": "duplicate_position",
+                        "symbol": symbol,
+                        "side": side,
+                        "quote_qty": quote_qty,
+                        "strategy_id": strategy_id,
+                    },
+                )
                 return False, f"❌ Position already exists for {symbol}"
 
         # 6. Check cool-down period after loss
@@ -136,6 +169,17 @@ class RiskManager:
             cool_down_end = self.last_loss_time + timedelta(minutes=self.cool_down_minutes)
             if datetime.utcnow() < cool_down_end:
                 remaining = (cool_down_end - datetime.utcnow()).total_seconds() / 60
+                self._write_audit_log(
+                    event="TRADE_REJECTED",
+                    details={
+                        "reason": "cool_down_active",
+                        "symbol": symbol,
+                        "side": side,
+                        "quote_qty": quote_qty,
+                        "strategy_id": strategy_id,
+                        "cool_down_remaining_minutes": round(remaining, 1),
+                    },
+                )
                 return False, f"⏳ Cool-down active: {remaining:.1f} min remaining after loss"
 
         # 7. Check circuit breaker status
@@ -245,14 +289,21 @@ class RiskManager:
                 f"All trading halted. Manual intervention required."
             )
 
-            # Telegram alert (synchronous via asyncio.run)
+            # Telegram alert (using synchronous wrapper to avoid asyncio.run crash)
             try:
                 from src.alerts.telegram import TelegramBot
 
                 telegram = TelegramBot()
-                import asyncio
-
-                asyncio.run(telegram.send_kill_switch_alert(daily_loss, self.max_daily_loss))
+                # Format kill-switch message manually
+                message = (
+                    f"🛑 *KILL-SWITCH ACTIVATED* 🛑\n\n"
+                    f"Daily Loss: `{daily_loss:.2f}` USDT\n"
+                    f"Limit: `{-self.max_daily_loss:.2f}` USDT\n"
+                    f"Utilization: `{abs(daily_loss / self.max_daily_loss * 100):.1f}%`\n\n"
+                    f"⚠️ *All trading halted. Manual intervention required.*\n"
+                    f"Reason: {reason}"
+                )
+                telegram.send_message_sync(message)
             except Exception as e:
                 logger.error(f"Failed to send Telegram kill-switch alert: {e}")
 

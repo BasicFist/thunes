@@ -9,6 +9,7 @@ This module provides real-time price feeds via Binance WebSocket API with:
 
 import time
 from collections.abc import Callable
+from queue import Queue
 from threading import Event, Lock, Thread
 from typing import Any
 
@@ -72,12 +73,20 @@ class WebSocketHealthMonitor:
         self._running = True
 
         def watchdog_loop() -> None:
-            while self._running:
-                time.sleep(self.check_interval_seconds)
-                if not self.is_healthy():
-                    logger.error(f"WebSocket unhealthy: no messages for {self.timeout_seconds}s")
-                    reconnect_callback()
-                    break
+            try:
+                while self._running:
+                    time.sleep(self.check_interval_seconds)
+                    if not self.is_healthy():
+                        logger.error(
+                            f"WebSocket unhealthy: no messages for {self.timeout_seconds}s"
+                        )
+                        reconnect_callback()
+                        break
+            finally:
+                # CRITICAL: Reset state so subsequent start_watchdog() calls can succeed
+                self._running = False
+                self._watchdog_thread = None
+                logger.debug("Watchdog thread exited, state cleared for reconnection")
 
         self._watchdog_thread = Thread(target=watchdog_loop, daemon=True)
         self._watchdog_thread.start()
@@ -87,10 +96,12 @@ class WebSocketHealthMonitor:
         )
 
     def stop_watchdog(self) -> None:
-        """Stop watchdog thread."""
+        """Stop watchdog thread and reset state for clean restart."""
         self._running = False
         if self._watchdog_thread and self._watchdog_thread.is_alive():
             self._watchdog_thread.join(timeout=2.0)
+        # Reset thread reference so start_watchdog can create a new one
+        self._watchdog_thread = None
         logger.info("Stopped WebSocket watchdog")
 
 
@@ -132,6 +143,10 @@ class BinanceWebSocketStream:
         self._max_reconnect_attempts = 5
         self._base_reconnect_delay = 1.0  # seconds
         self._stop_event = Event()
+
+        # Control thread for reconnection (prevents callback thread blocking)
+        self._reconnect_queue: Queue[str] = Queue()
+        self._control_thread: Thread | None = None
 
         # Health monitoring
         self.health_monitor = WebSocketHealthMonitor(timeout_seconds=60)

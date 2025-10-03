@@ -465,3 +465,349 @@ class TestValidateTradeStrategyId:
             entry = json.loads(f.readline())
 
         assert entry["strategy_id"] == "unknown"
+
+
+class TestCircuitBreakerIntegration:
+    """Tests for circuit breaker integration with RiskManager."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_audit_trail(self) -> Generator[None, None, None]:
+        """Remove audit trail file before/after tests."""
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+        yield
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+
+    @patch("src.risk.manager.circuit_monitor")
+    def test_validate_trade_rejects_when_circuit_breaker_open(
+        self, mock_circuit_monitor: Mock, risk_manager: RiskManager
+    ) -> None:
+        """Test trade validation fails when circuit breaker is open."""
+        # Mock circuit breaker as open
+        mock_circuit_monitor.is_any_open.return_value = True
+        mock_circuit_monitor.get_status.return_value = {
+            "binance_api": {
+                "state": "open",
+                "fail_counter": 5,
+            }
+        }
+
+        is_valid, msg = risk_manager.validate_trade(
+            symbol="BTCUSDT", quote_qty=4.0, side="BUY", strategy_id="test_strategy"
+        )
+
+        assert is_valid is False
+        assert "circuit breaker" in msg.lower()
+
+        # Verify audit trail
+        with open(AUDIT_TRAIL_PATH) as f:
+            entry = json.loads(f.readline())
+
+        assert entry["event"] == "TRADE_REJECTED"
+        assert entry["reason"] == "circuit_breaker_open"
+        assert "circuit_breaker_status" in entry
+
+    @patch("src.risk.manager.circuit_monitor")
+    def test_validate_trade_passes_when_circuit_breaker_closed(
+        self, mock_circuit_monitor: Mock, risk_manager: RiskManager
+    ) -> None:
+        """Test trade validation passes when circuit breaker is closed."""
+        mock_circuit_monitor.is_any_open.return_value = False
+
+        is_valid, msg = risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=4.0, side="BUY")
+
+        assert is_valid is True
+
+
+class TestDailyPnLCaching:
+    """Tests for daily PnL caching behavior."""
+
+    def test_get_daily_pnl_caches_result(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test daily PnL is cached to avoid excessive DB queries."""
+        today = datetime.utcnow()
+        mock_position_tracker.get_position_history.return_value = [
+            Position(
+                symbol="BTCUSDT",
+                quantity=Decimal("0.1"),
+                entry_price=Decimal("50000"),
+                entry_time=today,
+                order_id="1",
+                exit_price=Decimal("51000"),
+                exit_time=today,
+                pnl=Decimal("100.0"),
+                status="CLOSED",
+            ),
+        ]
+
+        # First call - should query DB
+        pnl1 = risk_manager.get_daily_pnl()
+        assert pnl1 == Decimal("100.0")
+        assert mock_position_tracker.get_position_history.call_count == 1
+
+        # Second call within 60 seconds - should use cache
+        pnl2 = risk_manager.get_daily_pnl()
+        assert pnl2 == Decimal("100.0")
+        assert mock_position_tracker.get_position_history.call_count == 1  # Not called again
+
+    def test_get_daily_pnl_cache_expires_after_60_seconds(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test daily PnL cache expires after 60 seconds."""
+        today = datetime.utcnow()
+        mock_position_tracker.get_position_history.return_value = [
+            Position(
+                symbol="BTCUSDT",
+                quantity=Decimal("0.1"),
+                entry_price=Decimal("50000"),
+                entry_time=today,
+                order_id="1",
+                exit_price=Decimal("51000"),
+                exit_time=today,
+                pnl=Decimal("100.0"),
+                status="CLOSED",
+            ),
+        ]
+
+        # First call
+        pnl1 = risk_manager.get_daily_pnl()
+        assert pnl1 == Decimal("100.0")
+
+        # Manually expire cache (simulate 61 seconds passing)
+        if risk_manager._daily_loss_cache:
+            cache_time, cache_value = risk_manager._daily_loss_cache
+            risk_manager._daily_loss_cache = (
+                cache_time - timedelta(seconds=61),
+                cache_value,
+            )
+
+        # Second call - cache expired, should query DB again
+        pnl2 = risk_manager.get_daily_pnl()
+        assert pnl2 == Decimal("100.0")
+        assert mock_position_tracker.get_position_history.call_count == 2
+
+
+class TestAuditLogWriteFailure:
+    """Tests for audit log write failure handling."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_audit_trail(self) -> Generator[None, None, None]:
+        """Remove audit trail file before/after tests."""
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+        yield
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+
+    @patch("builtins.open", side_effect=PermissionError("Permission denied"))
+    def test_audit_log_write_failure_logged_but_not_raised(
+        self, mock_open: Mock, risk_manager: RiskManager
+    ) -> None:
+        """Test audit log write failures are logged but don't crash."""
+        # This should not raise an exception even though open() fails
+        risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=4.0, side="BUY")
+
+        # Risk manager should still function
+        assert risk_manager.kill_switch_active is False
+
+
+class TestRiskStatusReporting:
+    """Tests for get_risk_status and log_risk_status."""
+
+    def test_get_risk_status_with_cool_down_active(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test risk status includes cool-down information."""
+        risk_manager.record_loss()
+
+        status = risk_manager.get_risk_status()
+
+        assert status["cool_down_active"] is True
+        assert status["cool_down_remaining_minutes"] is not None
+        assert status["cool_down_remaining_minutes"] > 0
+
+    def test_get_risk_status_with_cool_down_expired(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test risk status when cool-down has expired."""
+        # Set cool-down in the past
+        risk_manager.last_loss_time = datetime.utcnow() - timedelta(
+            minutes=settings.cool_down_minutes + 10
+        )
+
+        status = risk_manager.get_risk_status()
+
+        # Cool-down should be inactive
+        assert status["cool_down_active"] is False
+        assert status["cool_down_remaining_minutes"] is None
+
+    def test_get_risk_status_daily_loss_utilization(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test daily loss utilization percentage calculation."""
+        today = datetime.utcnow()
+
+        # Mock 50% of max daily loss
+        mock_position_tracker.get_position_history.return_value = [
+            Position(
+                symbol="BTCUSDT",
+                quantity=Decimal("0.1"),
+                entry_price=Decimal("50000"),
+                entry_time=today,
+                order_id="1",
+                exit_price=Decimal("49900"),
+                exit_time=today,
+                pnl=Decimal("-10.0"),  # 50% of MAX_DAILY_LOSS=20.0
+                status="CLOSED",
+            ),
+        ]
+
+        status = risk_manager.get_risk_status()
+
+        assert status["daily_loss_utilization"] == 50.0
+
+    def test_log_risk_status_executes_without_error(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test log_risk_status method executes successfully."""
+        # This should not raise any exceptions
+        risk_manager.log_risk_status()
+
+
+class TestKillSwitchEdgeCases:
+    """Tests for kill-switch edge cases."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_audit_trail(self) -> Generator[None, None, None]:
+        """Remove audit trail file before/after tests."""
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+        yield
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+
+    @patch("src.alerts.telegram.TelegramBot")
+    def test_deactivate_kill_switch_when_already_inactive(
+        self, mock_telegram_class: Mock, risk_manager: RiskManager
+    ) -> None:
+        """Test deactivating kill-switch when it's already inactive."""
+        # Kill-switch is inactive by default
+        assert risk_manager.kill_switch_active is False
+
+        # Should handle gracefully
+        risk_manager.deactivate_kill_switch(reason="Test")
+
+        # Should remain inactive
+        assert risk_manager.kill_switch_active is False
+
+    @patch("src.alerts.telegram.TelegramBot")
+    def test_activate_kill_switch_when_already_active(
+        self, mock_telegram_class: Mock, risk_manager: RiskManager
+    ) -> None:
+        """Test activating kill-switch when it's already active."""
+        # Activate first time
+        risk_manager.activate_kill_switch(reason="First activation")
+        assert risk_manager.kill_switch_active is True
+
+        # Clear audit trail
+        AUDIT_TRAIL_PATH.unlink()
+
+        # Activate again - should be idempotent
+        risk_manager.activate_kill_switch(reason="Second activation")
+        assert risk_manager.kill_switch_active is True
+
+        # Should NOT create audit log entry (already active)
+        assert not AUDIT_TRAIL_PATH.exists()
+
+
+class TestSellOrderValidation:
+    """Tests for SELL order validation logic."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_audit_trail(self) -> Generator[None, None, None]:
+        """Remove audit trail file before/after tests."""
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+        yield
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+
+    def test_sell_order_ignores_per_trade_limit(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test SELL orders are not subject to per-trade loss limit."""
+        # SELL with large quote_qty that would exceed limit for BUY
+        is_valid, msg = risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=100.0, side="SELL")
+
+        # Should pass - SELL doesn't check per-trade limit
+        assert is_valid is True
+
+    def test_sell_order_ignores_position_count_limit(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test SELL orders are not subject to position count limit."""
+        # Mock max positions reached
+        mock_position_tracker.get_all_open_positions.return_value = [
+            Mock(),
+            Mock(),
+            Mock(),
+        ]
+
+        is_valid, msg = risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=10.0, side="SELL")
+
+        # Should pass - SELL doesn't check position limit
+        assert is_valid is True
+
+    def test_sell_order_ignores_duplicate_position_check(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test SELL orders are not subject to duplicate position check."""
+        mock_position_tracker.has_open_position.return_value = True
+
+        is_valid, msg = risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=10.0, side="SELL")
+
+        # Should pass - SELL doesn't check for duplicate position
+        assert is_valid is True
+
+
+class TestConcurrentValidation:
+    """Tests for concurrent trade validation edge cases."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_audit_trail(self) -> Generator[None, None, None]:
+        """Remove audit trail file before/after tests."""
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+        yield
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+
+    def test_multiple_trades_same_symbol_rejected(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test multiple BUY orders for same symbol are rejected."""
+        # First trade should pass
+        is_valid1, msg1 = risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=4.0, side="BUY")
+        assert is_valid1 is True
+
+        # Mock position tracker to show position exists
+        mock_position_tracker.has_open_position.return_value = True
+
+        # Second trade for same symbol should fail
+        is_valid2, msg2 = risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=4.0, side="BUY")
+        assert is_valid2 is False
+        assert "already exists" in msg2.lower()
+
+    def test_multiple_trades_different_symbols_allowed(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test multiple BUY orders for different symbols are allowed."""
+        # First trade
+        is_valid1, msg1 = risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=4.0, side="BUY")
+        assert is_valid1 is True
+
+        # Second trade for different symbol
+        is_valid2, msg2 = risk_manager.validate_trade(symbol="ETHUSDT", quote_qty=4.0, side="BUY")
+        assert is_valid2 is True
