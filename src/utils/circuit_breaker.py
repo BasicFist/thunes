@@ -180,6 +180,31 @@ class CircuitBreakerMonitor:
             breakers: List of circuit breakers to monitor
         """
         self.breakers = breakers
+        self._breakers_by_name = {b.name: b for b in breakers}
+
+    def is_open(self, breaker_name: str) -> bool:
+        """Check if a specific circuit breaker is open.
+
+        Args:
+            breaker_name: Name of the circuit breaker
+
+        Returns:
+            True if breaker is open (blocking calls), False otherwise
+
+        Raises:
+            KeyError: If breaker_name not found
+        """
+        breaker = self._breakers_by_name.get(breaker_name)
+        if breaker is None:
+            return False  # Breaker doesn't exist - assume closed
+
+        # Check state - pybreaker uses state names
+        state_str = (
+            breaker.current_state
+            if isinstance(breaker.current_state, str)
+            else str(breaker.current_state)
+        )
+        return "open" in state_str.lower()
 
     def get_status(self) -> dict[str, dict]:
         """

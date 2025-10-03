@@ -4,9 +4,12 @@ import argparse
 
 from src.backtest.rsi_strategy import RSIStrategy
 from src.backtest.strategy import SMAStrategy
-from src.config import ARTIFACTS_DIR
+from src.config import ARTIFACTS_DIR, ensure_directories
 from src.data.binance_client import BinanceDataClient
 from src.utils.logger import setup_logger
+
+# Ensure required directories exist (entrypoint responsibility)
+ensure_directories()
 
 logger = setup_logger(__name__, log_file="backtest.log")
 

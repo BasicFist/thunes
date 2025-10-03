@@ -40,16 +40,15 @@ class TestWebSocketHealthMonitor:
         assert not monitor.is_healthy()
 
     def test_watchdog_triggers_reconnect(self) -> None:
-        """Test that watchdog calls reconnect callback when unhealthy."""
+        """Test that watchdog signals reconnection via Queue when unhealthy."""
+        from queue import Queue
+
         # Use short intervals for testing (timeout=1s, check every 1s)
         monitor = WebSocketHealthMonitor(timeout_seconds=1, check_interval_seconds=1)
-        reconnect_called = {"value": False}
+        reconnect_queue: Queue[str] = Queue()
 
-        def reconnect_callback() -> None:
-            reconnect_called["value"] = True
-
-        # Start watchdog
-        monitor.start_watchdog(reconnect_callback)
+        # Start watchdog with Queue
+        monitor.start_watchdog(reconnect_queue)
 
         # Wait for timeout + check interval + buffer
         # 1s timeout + 1s check + 0.5s buffer = 2.5s
@@ -58,17 +57,19 @@ class TestWebSocketHealthMonitor:
         # Stop watchdog
         monitor.stop_watchdog()
 
-        # Verify reconnect was called
-        assert reconnect_called["value"] is True
+        # Verify reconnect signal was queued
+        assert not reconnect_queue.empty(), "Reconnect signal not queued"
+        signal = reconnect_queue.get(timeout=1)
+        assert signal == "reconnect", f"Expected 'reconnect', got '{signal}'"
 
     def test_watchdog_stop(self) -> None:
         """Test stopping watchdog thread."""
+        from queue import Queue
+
         monitor = WebSocketHealthMonitor(timeout_seconds=60)
+        reconnect_queue: Queue[str] = Queue()
 
-        def dummy_callback() -> None:
-            pass
-
-        monitor.start_watchdog(dummy_callback)
+        monitor.start_watchdog(reconnect_queue)
         assert monitor._running is True
 
         monitor.stop_watchdog()

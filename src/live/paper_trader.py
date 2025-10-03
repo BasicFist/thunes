@@ -76,9 +76,22 @@ class PaperTrader:
         self.filters = ExchangeFilters(self.client)
         self.position_tracker = PositionTracker()
 
-        # Risk management
+        # Telegram notifications (initialize BEFORE RiskManager)
+        self.telegram: TelegramBot | None = None
+        if enable_telegram:
+            self.telegram = TelegramBot()
+            if self.telegram.enabled:
+                logger.info("Telegram notifications enabled")
+            else:
+                logger.warning("Telegram disabled: Missing token or chat_id in .env")
+
+        # Risk management (with Telegram propagation)
         if enable_risk_manager:
-            self.risk_manager = RiskManager(position_tracker=self.position_tracker)
+            self.risk_manager = RiskManager(
+                position_tracker=self.position_tracker,
+                enable_telegram=enable_telegram,
+                telegram_bot=self.telegram,
+            )
             logger.info("RiskManager enabled")
 
         # Performance tracking
@@ -90,14 +103,6 @@ class PaperTrader:
                 rolling_window_days=7,
             )
             logger.info("PerformanceTracker enabled")
-
-        # Telegram notifications
-        if enable_telegram:
-            self.telegram = TelegramBot()
-            if self.telegram.enabled:
-                logger.info("Telegram notifications enabled")
-            else:
-                logger.warning("Telegram disabled: Missing token or chat_id in .env")
 
         # Parameter management
         self.params_file = ARTIFACTS_DIR / "optimize" / "current_parameters.json"

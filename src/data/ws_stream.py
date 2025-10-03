@@ -205,9 +205,10 @@ class BinanceWebSocketStream:
         """
         logger.error(f"WebSocket error: {msg}")
 
-        # Trigger reconnection for critical errors
+        # Trigger reconnection for critical errors (non-blocking via queue)
         if msg.get("m") == "error":
-            self._attempt_reconnect()
+            logger.info("Queueing reconnection request from error handler")
+            self._reconnect_queue.put("reconnect")
 
     def _attempt_reconnect(self) -> None:
         """Attempt to reconnect with exponential backoff."""

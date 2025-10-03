@@ -84,8 +84,22 @@ PROJECT_ROOT = Path(__file__).parent.parent
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
-# Ensure directories exist
-ARTIFACTS_DIR.mkdir(exist_ok=True)
-LOGS_DIR.mkdir(exist_ok=True)
-(ARTIFACTS_DIR / "backtest").mkdir(exist_ok=True)
-(ARTIFACTS_DIR / "optuna").mkdir(exist_ok=True)
+
+def ensure_directories() -> None:
+    """Ensure required directories exist.
+
+    IMPORTANT: Call this from entrypoints (backtest, paper, optimize) instead of
+    at module import time to avoid failures in read-only or testing environments.
+
+    Creates:
+    - artifacts/
+    - artifacts/backtest/
+    - artifacts/optuna/
+    - artifacts/monitoring/
+    - logs/
+    """
+    ARTIFACTS_DIR.mkdir(exist_ok=True)
+    LOGS_DIR.mkdir(exist_ok=True)
+    (ARTIFACTS_DIR / "backtest").mkdir(exist_ok=True)
+    (ARTIFACTS_DIR / "optuna").mkdir(exist_ok=True)
+    (ARTIFACTS_DIR / "monitoring").mkdir(exist_ok=True)
