@@ -280,7 +280,7 @@ def with_rate_limit(
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> T:
+        def wrapper(*args: object, **kwargs: object) -> T:
             # Acquire rate limit permission (blocking)
             binance_rate_limiter.acquire(weight=weight, is_order=is_order, blocking=True)
 

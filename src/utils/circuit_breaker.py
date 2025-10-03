@@ -19,10 +19,12 @@ T = TypeVar("T")
 class CircuitBreakerListener(pybreaker.CircuitBreakerListener):
     """Log circuit breaker state transitions."""
 
-    def state_change(self, cb: pybreaker.CircuitBreaker, old_state, new_state) -> None:
+    def state_change(
+        self, cb: pybreaker.CircuitBreaker, old_state: object, new_state: object
+    ) -> None:
         """Log state changes."""
         logger.warning(
-            f"Circuit breaker '{cb.name}' state changed: {old_state.name} -> {new_state.name}"
+            f"Circuit breaker '{cb.name}' state changed: {old_state.name} -> {new_state.name}"  # type: ignore[attr-defined]
         )
 
     def failure(self, cb: pybreaker.CircuitBreaker, exc: Exception) -> None:
@@ -96,16 +98,71 @@ def with_circuit_breaker(
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> T:
+        def wrapper(*args: object, **kwargs: object) -> T:
+            # Hybrid approach: Use PyBreaker's state machine, but filter exceptions
+            # Check circuit state - but allow calls through if reset_timeout has passed
+            # (PyBreaker transitions OPEN→HALF_OPEN during the call, not automatically)
+            from datetime import datetime
+
+            if circuit_breaker.current_state == pybreaker.STATE_OPEN:
+                # Check if enough time has passed for HALF_OPEN transition
+                if hasattr(circuit_breaker._state_storage, "opened_at"):
+                    now = datetime.utcnow()
+                    opened_at = circuit_breaker._state_storage.opened_at
+                    if (
+                        opened_at
+                        and (now - opened_at).total_seconds() < circuit_breaker.reset_timeout
+                    ):
+                        # Still within timeout period - reject call
+                        logger.error(
+                            f"Circuit breaker '{circuit_breaker.name}' is OPEN - rejecting call to {func.__name__}"
+                        )
+                        raise RuntimeError(
+                            f"Service unavailable: {circuit_breaker.name} circuit is open"
+                        )
+                    # Timeout passed - transition to HALF_OPEN
+                    circuit_breaker._state_storage.state = pybreaker.STATE_HALF_OPEN
+                    logger.info(
+                        f"Circuit breaker '{circuit_breaker.name}' transitioned to HALF_OPEN"
+                    )
+
             try:
-                return circuit_breaker.call(func, *args, **kwargs)
-            except pybreaker.CircuitBreakerError as e:
-                logger.error(
-                    f"Circuit breaker '{circuit_breaker.name}' is OPEN - rejecting call to {func.__name__}"
-                )
-                raise RuntimeError(
-                    f"Service unavailable: {circuit_breaker.name} circuit is open"
-                ) from e
+                # Execute the function
+                result = func(*args, **kwargs)
+
+                # Success - reset failure counter
+                circuit_breaker._state_storage.reset_counter()
+
+                # If in HALF_OPEN, transition to CLOSED
+                if circuit_breaker.current_state == pybreaker.STATE_HALF_OPEN:
+                    circuit_breaker.close()
+                    logger.info(
+                        f"Circuit breaker '{circuit_breaker.name}' CLOSED after successful call"
+                    )
+
+                return result
+
+            except Exception as e:
+                # Only count server errors as failures
+                if is_server_error(e):
+                    # Increment failure counter
+                    circuit_breaker._state_storage.increment_counter()
+
+                    # If we've hit fail_max, open the circuit
+                    if circuit_breaker.fail_counter >= circuit_breaker.fail_max:
+                        circuit_breaker.open()
+                        logger.error(
+                            f"Circuit breaker '{circuit_breaker.name}' OPENED after {circuit_breaker.fail_counter} failures"
+                        )
+                    # If in HALF_OPEN and failed, re-open
+                    elif circuit_breaker.current_state == pybreaker.STATE_HALF_OPEN:
+                        circuit_breaker.open()
+                        logger.error(
+                            f"Circuit breaker '{circuit_breaker.name}' re-OPENED after failure in HALF_OPEN state"
+                        )
+
+                # Re-raise all exceptions
+                raise
 
         return wrapper
 

@@ -46,7 +46,8 @@ class TestTokenBucket:
         result = bucket.consume(tokens=20, blocking=False)
 
         assert result is False
-        assert bucket.tokens == 10  # No change
+        # Allow for small floating-point drift from time-based refill (~0.001 tokens)
+        assert pytest.approx(bucket.tokens, abs=0.01) == 10
 
     def test_consume_tokens_blocking_waits(self) -> None:
         """Test that blocking mode waits for tokens."""
@@ -139,7 +140,8 @@ class TestBinanceRateLimiter:
 
         assert result is True
         available = limiter.ip_limiter.get_available_tokens()
-        assert available <= 1195  # 1200 - 5
+        # Should be ~1195 (1200 - 5), allow small drift from refill
+        assert 1194 <= available <= 1196
 
     def test_acquire_order_permission(self) -> None:
         """Test acquiring order permission."""
@@ -150,12 +152,12 @@ class TestBinanceRateLimiter:
 
         assert result is True
 
-        # Check both limiters consumed tokens
+        # Check both limiters consumed tokens (allow drift from refill)
         ip_tokens = limiter.ip_limiter.get_available_tokens()
         order_tokens = limiter.order_limiter.get_available_tokens()
 
-        assert ip_tokens <= 1199  # 1200 - 1
-        assert order_tokens <= 49  # 50 - 1
+        assert 1198 <= ip_tokens <= 1200  # ~1199 (1200 - 1)
+        assert 48.5 <= order_tokens <= 49.5  # ~49 (50 - 1)
 
     def test_update_server_weight(self) -> None:
         """Test updating server-reported weight."""
@@ -193,10 +195,10 @@ class TestBinanceRateLimiter:
         # Reset
         limiter.reset()
 
-        # Should be back to full capacity
+        # Should be back to full capacity (with small tolerance for time drift)
         status = limiter.get_status()
-        assert status["ip_tokens_available"] == 1200
-        assert status["order_tokens_available"] == 50
+        assert pytest.approx(status["ip_tokens_available"], abs=1) == 1200
+        assert pytest.approx(status["order_tokens_available"], abs=0.1) == 50
         assert status["server_weight"] == 0
 
 
@@ -219,8 +221,9 @@ class TestRateLimitDecorator:
 
     def test_decorator_multiple_calls(self) -> None:
         """Test decorator with multiple calls."""
-        limiter = BinanceRateLimiter()
-        limiter.reset()  # Start fresh
+        from src.utils.rate_limiter import binance_rate_limiter
+
+        binance_rate_limiter.reset()  # Start fresh
 
         @with_rate_limit(weight=10, is_order=False)
         def api_call() -> str:
@@ -231,11 +234,10 @@ class TestRateLimitDecorator:
             result = api_call()
             assert result == "success"
 
-        # Check weight consumed
-        status = limiter.get_status()
-        # Note: Global limiter is shared, so exact value depends on other tests
-        # Just verify it's less than max
-        assert status["ip_tokens_available"] < 1200
+        # Check weight consumed from GLOBAL limiter (used by decorator)
+        status = binance_rate_limiter.get_status()
+        # Should have consumed 50 tokens (5 calls × 10 weight), allow drift
+        assert 1145 <= status["ip_tokens_available"] <= 1155  # ~1150 (1200 - 50)
 
 
 class TestRateLimitIntegration:
@@ -267,17 +269,17 @@ class TestRateLimitIntegration:
         config = RateLimitConfig(max_tokens=10, refill_rate=10, name="sustained_test")
         bucket = TokenBucket(config)
 
-        # Consume at sustainable rate (blocking mode)
+        # Consume more than buffer capacity to force waiting (blocking mode)
         start = time.monotonic()
 
-        for _ in range(5):
+        # 6 requests * 2 tokens = 12 tokens
+        # Initial buffer: 10 tokens (first 5 requests)
+        # 6th request needs 2 more tokens → wait 2/10 = 0.2 seconds
+        for _ in range(6):
             bucket.consume(tokens=2, blocking=True)
 
         elapsed = time.monotonic() - start
 
-        # First request uses buffered tokens, rest wait for refill
-        # 5 requests * 2 tokens = 10 tokens
-        # Initial: 10 tokens (handles first 5 tokens)
-        # Remaining 5 tokens require waiting: 5/10 = 0.5 seconds
-        assert elapsed >= 0.4  # Allow tolerance
-        assert elapsed < 0.7
+        # Should wait ~0.2 seconds for final 2 tokens
+        assert elapsed >= 0.15  # Allow tolerance for scheduling
+        assert elapsed < 0.4  # Should not take too long
