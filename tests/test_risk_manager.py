@@ -1,14 +1,16 @@
 """Tests for Risk Manager module."""
 
+import json
+from collections.abc import Generator
 from datetime import datetime, timedelta
 from decimal import Decimal
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
 from src.config import settings
 from src.models.position import Position, PositionTracker
-from src.risk.manager import RiskManager
+from src.risk.manager import AUDIT_TRAIL_PATH, RiskManager
 
 
 @pytest.fixture
@@ -261,3 +263,205 @@ def test_reset_daily_state_preserves_kill_switch(risk_manager: RiskManager) -> N
 
     # Kill-switch should still be active (requires manual deactivation)
     assert risk_manager.kill_switch_active is True
+
+
+class TestAuditTrail:
+    """Tests for audit trail functionality."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_audit_trail(self) -> Generator[None, None, None]:
+        """Remove audit trail file before/after tests."""
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+        yield
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+
+    def test_audit_trail_created_on_kill_switch(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test audit trail entry created when kill-switch activated."""
+        # Mock Telegram to avoid actual network calls
+        with patch("src.alerts.telegram.TelegramBot"):
+            risk_manager.activate_kill_switch(reason="Test activation")
+
+        # Verify audit trail file created
+        assert AUDIT_TRAIL_PATH.exists()
+
+        # Read and verify audit entry
+        with open(AUDIT_TRAIL_PATH) as f:
+            entries = [json.loads(line) for line in f]
+
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["event"] == "KILL_SWITCH_ACTIVATED"
+        assert entry["reason"] == "Test activation"
+        assert "timestamp" in entry
+        assert "daily_pnl" in entry
+        assert "circuit_breaker_status" in entry
+
+    def test_audit_trail_logs_trade_rejections(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test audit trail logs rejected trades."""
+        # Activate kill-switch to trigger rejection
+        with patch("src.alerts.telegram.TelegramBot"):
+            risk_manager.activate_kill_switch()
+
+        # Clear audit trail from kill-switch activation
+        AUDIT_TRAIL_PATH.unlink()
+
+        # Attempt trade (should be rejected)
+        is_valid, msg = risk_manager.validate_trade(
+            symbol="BTCUSDT", quote_qty=10.0, side="BUY", strategy_id="test_strategy"
+        )
+
+        assert is_valid is False
+
+        # Verify rejection logged
+        with open(AUDIT_TRAIL_PATH) as f:
+            entries = [json.loads(line) for line in f]
+
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["event"] == "TRADE_REJECTED"
+        assert entry["reason"] == "kill_switch_active"
+        assert entry["symbol"] == "BTCUSDT"
+        assert entry["strategy_id"] == "test_strategy"
+
+    def test_audit_trail_logs_trade_approvals(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test audit trail logs approved trades."""
+        is_valid, msg = risk_manager.validate_trade(
+            symbol="BTCUSDT", quote_qty=4.0, side="BUY", strategy_id="rsi_strategy"
+        )
+
+        assert is_valid is True
+
+        # Verify approval logged
+        with open(AUDIT_TRAIL_PATH) as f:
+            entries = [json.loads(line) for line in f]
+
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["event"] == "TRADE_APPROVED"
+        assert entry["symbol"] == "BTCUSDT"
+        assert entry["side"] == "BUY"
+        assert entry["quote_qty"] == 4.0
+        assert entry["strategy_id"] == "rsi_strategy"
+
+    def test_audit_trail_logs_kill_switch_deactivation(self, risk_manager: RiskManager) -> None:
+        """Test audit trail logs kill-switch deactivation."""
+        # Activate then deactivate
+        with patch("src.alerts.telegram.TelegramBot"):
+            risk_manager.activate_kill_switch()
+        risk_manager.deactivate_kill_switch(reason="Manual override")
+
+        # Read all entries
+        with open(AUDIT_TRAIL_PATH) as f:
+            entries = [json.loads(line) for line in f]
+
+        # Should have 2 entries: activation + deactivation
+        assert len(entries) == 2
+        assert entries[0]["event"] == "KILL_SWITCH_ACTIVATED"
+        assert entries[1]["event"] == "KILL_SWITCH_DEACTIVATED"
+        assert entries[1]["reason"] == "Manual override"
+
+    def test_audit_trail_jsonl_format(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test audit trail uses JSONL format (one JSON per line)."""
+        # Create multiple events
+        risk_manager.validate_trade("BTCUSDT", 4.0, "BUY", "strategy1")
+        risk_manager.validate_trade("ETHUSDT", 3.0, "BUY", "strategy2")
+
+        # Verify each line is valid JSON
+        with open(AUDIT_TRAIL_PATH) as f:
+            lines = f.readlines()
+
+        assert len(lines) == 2
+        for line in lines:
+            entry = json.loads(line.strip())
+            assert "event" in entry
+            assert "timestamp" in entry
+
+
+class TestTelegramIntegration:
+    """Tests for Telegram alert integration."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_audit_trail(self) -> Generator[None, None, None]:
+        """Remove audit trail file before/after tests."""
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+        yield
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+
+    @patch("src.alerts.telegram.TelegramBot")
+    def test_kill_switch_sends_telegram_alert(
+        self, mock_telegram_class: Mock, risk_manager: RiskManager
+    ) -> None:
+        """Test kill-switch activation sends Telegram alert."""
+        mock_telegram_instance = Mock()
+        mock_telegram_instance.send_kill_switch_alert = Mock()
+        mock_telegram_class.return_value = mock_telegram_instance
+
+        risk_manager.activate_kill_switch(reason="Test alert")
+
+        # Verify Telegram bot was instantiated
+        mock_telegram_class.assert_called_once()
+
+    @patch("src.alerts.telegram.TelegramBot")
+    def test_kill_switch_handles_telegram_failure_gracefully(
+        self, mock_telegram_class: Mock, risk_manager: RiskManager
+    ) -> None:
+        """Test kill-switch activation continues even if Telegram fails."""
+        # Make Telegram raise an exception
+        mock_telegram_class.side_effect = Exception("Telegram API error")
+
+        # Should not raise - kill-switch should still activate
+        risk_manager.activate_kill_switch()
+
+        assert risk_manager.kill_switch_active is True
+
+        # Audit trail should still be written
+        assert AUDIT_TRAIL_PATH.exists()
+
+
+class TestValidateTradeStrategyId:
+    """Tests for strategy_id parameter in validate_trade."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_audit_trail(self) -> Generator[None, None, None]:
+        """Remove audit trail file before/after tests."""
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+        yield
+        if AUDIT_TRAIL_PATH.exists():
+            AUDIT_TRAIL_PATH.unlink()
+
+    def test_strategy_id_included_in_audit_log(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test strategy_id is captured in audit log."""
+        risk_manager.validate_trade(
+            symbol="BTCUSDT", quote_qty=4.0, side="BUY", strategy_id="rsi_conservative"
+        )
+
+        with open(AUDIT_TRAIL_PATH) as f:
+            entry = json.loads(f.readline())
+
+        assert entry["strategy_id"] == "rsi_conservative"
+
+    def test_default_strategy_id(
+        self, risk_manager: RiskManager, mock_position_tracker: Mock
+    ) -> None:
+        """Test default strategy_id when not provided."""
+        risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=4.0, side="BUY")
+
+        with open(AUDIT_TRAIL_PATH) as f:
+            entry = json.loads(f.readline())
+
+        assert entry["strategy_id"] == "unknown"

@@ -6,10 +6,14 @@ This module implements critical safety features:
 - Position count limits
 - Cool-down periods after losses
 - Circuit breaker integration
+- Immutable audit trail for regulatory compliance
+- Telegram alerts for critical events
 """
 
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 from src.config import settings
 from src.models.position import PositionTracker
@@ -17,6 +21,9 @@ from src.utils.circuit_breaker import circuit_monitor
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+# Audit trail file path
+AUDIT_TRAIL_PATH = Path("logs/audit_trail.jsonl")
 
 
 class RiskManager:
@@ -52,6 +59,7 @@ class RiskManager:
         symbol: str,
         quote_qty: float,
         side: str = "BUY",
+        strategy_id: str = "unknown",
     ) -> tuple[bool, str]:
         """
         Validate if trade is allowed under risk management rules.
@@ -60,18 +68,41 @@ class RiskManager:
             symbol: Trading pair symbol
             quote_qty: Amount in quote currency (e.g., USDT)
             side: Trade side ("BUY" or "SELL")
+            strategy_id: Strategy identifier for audit trail
 
         Returns:
             Tuple of (is_valid, reason_message)
         """
         # 1. Check kill-switch
         if self.kill_switch_active:
+            self._write_audit_log(
+                event="TRADE_REJECTED",
+                details={
+                    "reason": "kill_switch_active",
+                    "symbol": symbol,
+                    "side": side,
+                    "quote_qty": quote_qty,
+                    "strategy_id": strategy_id,
+                },
+            )
             return False, "🛑 KILL-SWITCH ACTIVE: Trading halted due to max daily loss"
 
         # 2. Check daily loss limit
         daily_loss = self.get_daily_pnl()
         if daily_loss <= -self.max_daily_loss:
-            self.activate_kill_switch()
+            self.activate_kill_switch(reason=f"Daily loss {daily_loss:.2f} exceeds limit")
+            self._write_audit_log(
+                event="TRADE_REJECTED",
+                details={
+                    "reason": "daily_loss_limit_exceeded",
+                    "symbol": symbol,
+                    "side": side,
+                    "quote_qty": quote_qty,
+                    "strategy_id": strategy_id,
+                    "daily_pnl": float(daily_loss),
+                    "daily_loss_limit": float(self.max_daily_loss),
+                },
+            )
             return (
                 False,
                 f"🛑 KILL-SWITCH: Daily loss {daily_loss:.2f} exceeds limit {-self.max_daily_loss:.2f}",
@@ -110,7 +141,31 @@ class RiskManager:
         # 7. Check circuit breaker status
         if circuit_monitor.is_any_open():
             status = circuit_monitor.get_status()
+            self._write_audit_log(
+                event="TRADE_REJECTED",
+                details={
+                    "reason": "circuit_breaker_open",
+                    "symbol": symbol,
+                    "side": side,
+                    "quote_qty": quote_qty,
+                    "strategy_id": strategy_id,
+                    "circuit_breaker_status": status,
+                },
+            )
             return False, f"⚡ Circuit breaker open: {status}"
+
+        # All checks passed - log approval
+        self._write_audit_log(
+            event="TRADE_APPROVED",
+            details={
+                "symbol": symbol,
+                "side": side,
+                "quote_qty": quote_qty,
+                "strategy_id": strategy_id,
+                "daily_pnl": float(daily_loss),
+                "open_positions": len(self.position_tracker.get_all_open_positions()),
+            },
+        )
 
         return True, "✅ Trade validation passed"
 
@@ -144,11 +199,42 @@ class RiskManager:
         logger.debug(f"Daily PnL: {daily_pnl:.2f} (from {len(all_positions)} positions)")
         return daily_pnl
 
-    def activate_kill_switch(self) -> None:
+    def _write_audit_log(self, event: str, details: dict) -> None:
+        """
+        Write event to immutable audit trail for regulatory compliance.
+
+        Args:
+            event: Event type (e.g., "KILL_SWITCH_ACTIVATED", "TRADE_REJECTED")
+            details: Event-specific details dictionary
+        """
+        audit_entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "event": event,
+            **details,
+        }
+
+        # Ensure logs directory exists
+        AUDIT_TRAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        # Append to audit trail (JSONL format - one JSON object per line)
+        try:
+            with open(AUDIT_TRAIL_PATH, "a") as f:
+                f.write(json.dumps(audit_entry) + "\n")
+            logger.debug(f"Audit log written: {event}")
+        except Exception as e:
+            logger.error(f"Failed to write audit log: {e}")
+
+    def activate_kill_switch(self, reason: str = "Daily loss limit exceeded") -> None:
         """
         Activate kill-switch to halt all trading.
 
-        This should trigger alerts and prevent any new trades.
+        Triggers:
+        - Critical logging
+        - Telegram alert
+        - Immutable audit trail entry
+
+        Args:
+            reason: Reason for activation (for audit trail)
         """
         if not self.kill_switch_active:
             self.kill_switch_active = True
@@ -159,18 +245,48 @@ class RiskManager:
                 f"All trading halted. Manual intervention required."
             )
 
-            # TODO: Trigger Telegram alert (Phase 9)
+            # Telegram alert (synchronous via asyncio.run)
+            try:
+                from src.alerts.telegram import TelegramBot
+
+                telegram = TelegramBot()
+                import asyncio
+
+                asyncio.run(telegram.send_kill_switch_alert(daily_loss, self.max_daily_loss))
+            except Exception as e:
+                logger.error(f"Failed to send Telegram kill-switch alert: {e}")
+
+            # Immutable audit trail
+            self._write_audit_log(
+                event="KILL_SWITCH_ACTIVATED",
+                details={
+                    "reason": reason,
+                    "daily_pnl": float(daily_loss),
+                    "daily_loss_limit": float(self.max_daily_loss),
+                    "open_positions": len(self.position_tracker.get_all_open_positions()),
+                    "circuit_breaker_status": circuit_monitor.get_status(),
+                },
+            )
 
     def deactivate_kill_switch(self, reason: str = "Manual reset") -> None:
         """
         Deactivate kill-switch (requires manual action).
 
         Args:
-            reason: Reason for deactivation
+            reason: Reason for deactivation (for audit trail)
         """
         if self.kill_switch_active:
             self.kill_switch_active = False
             logger.warning(f"Kill-switch deactivated: {reason}")
+
+            # Audit trail entry
+            self._write_audit_log(
+                event="KILL_SWITCH_DEACTIVATED",
+                details={
+                    "reason": reason,
+                    "daily_pnl": float(self.get_daily_pnl()),
+                },
+            )
         else:
             logger.info("Kill-switch was not active")
 
