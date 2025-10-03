@@ -8,7 +8,6 @@ This module provides real-time price feeds via Binance WebSocket API with:
 """
 
 import time
-from collections.abc import Callable
 from queue import Queue
 from threading import Event, Lock, Thread
 from typing import Any
@@ -60,11 +59,11 @@ class WebSocketHealthMonitor:
             elapsed = time.monotonic() - self.last_message_time
             return elapsed < self.timeout_seconds
 
-    def start_watchdog(self, reconnect_callback: Callable[[], None]) -> None:
+    def start_watchdog(self, reconnect_queue: Queue[str]) -> None:
         """Start background watchdog thread.
 
         Args:
-            reconnect_callback: Function to call when connection is unhealthy
+            reconnect_queue: Queue to signal reconnection requests (non-blocking)
         """
         if self._running:
             logger.warning("Watchdog already running")
@@ -80,7 +79,8 @@ class WebSocketHealthMonitor:
                         logger.error(
                             f"WebSocket unhealthy: no messages for {self.timeout_seconds}s"
                         )
-                        reconnect_callback()
+                        # Non-blocking: signal control thread to handle reconnection
+                        reconnect_queue.put("reconnect")
                         break
             finally:
                 # CRITICAL: Reset state so subsequent start_watchdog() calls can succeed
@@ -237,6 +237,22 @@ class BinanceWebSocketStream:
         # Restart stream
         self.start()
 
+    def _control_loop(self) -> None:
+        """Control thread that handles reconnection requests from watchdog.
+
+        This prevents the watchdog from blocking on itself when calling stop().
+        """
+        while not self._stop_event.is_set():
+            try:
+                # Block until watchdog signals reconnection (with timeout)
+                signal = self._reconnect_queue.get(timeout=1.0)
+                if signal == "reconnect":
+                    logger.info("Control thread received reconnect signal")
+                    self._attempt_reconnect()
+            except Exception:
+                # Timeout or queue closed - continue monitoring
+                continue
+
     def start(self) -> None:
         """Start WebSocket stream for bookTicker data.
 
@@ -244,6 +260,12 @@ class BinanceWebSocketStream:
         """
         if self._stop_event.is_set():
             self._stop_event.clear()
+
+        # Start control thread for reconnection handling
+        if self._control_thread is None or not self._control_thread.is_alive():
+            self._control_thread = Thread(target=self._control_loop, daemon=True)
+            self._control_thread.start()
+            logger.info("Started WebSocket control thread")
 
         # Initialize manager if needed
         if self.twm is None:
@@ -258,8 +280,8 @@ class BinanceWebSocketStream:
             )
             logger.info(f"Started bookTicker stream for {self.symbol}")
 
-            # Start health monitoring
-            self.health_monitor.start_watchdog(reconnect_callback=self._attempt_reconnect)
+            # Start health monitoring (signals via queue instead of callback)
+            self.health_monitor.start_watchdog(reconnect_queue=self._reconnect_queue)
 
         except Exception as e:
             logger.error(f"Failed to start WebSocket stream: {e}")

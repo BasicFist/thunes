@@ -14,6 +14,7 @@ import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from src.config import settings
 from src.models.position import PositionTracker
@@ -29,14 +30,23 @@ AUDIT_TRAIL_PATH = Path("logs/audit_trail.jsonl")
 class RiskManager:
     """Enforces trading risk limits with kill-switch protection."""
 
-    def __init__(self, position_tracker: PositionTracker | None = None) -> None:
+    def __init__(
+        self,
+        position_tracker: PositionTracker | None = None,
+        enable_telegram: bool = True,
+        telegram_bot: Any | None = None,
+    ) -> None:
         """
         Initialize risk manager.
 
         Args:
             position_tracker: PositionTracker instance (creates new if None)
+            enable_telegram: Enable Telegram kill-switch alerts
+            telegram_bot: Pre-initialized TelegramBot instance (creates new if None and enabled)
         """
         self.position_tracker = position_tracker or PositionTracker()
+        self.enable_telegram = enable_telegram
+        self.telegram_bot = telegram_bot
 
         # Risk limits from config
         self.max_loss_per_trade = Decimal(str(settings.max_loss_per_trade))
@@ -51,7 +61,8 @@ class RiskManager:
 
         logger.info(
             f"RiskManager initialized: max_loss_per_trade={self.max_loss_per_trade}, "
-            f"max_daily_loss={self.max_daily_loss}, max_positions={self.max_positions}"
+            f"max_daily_loss={self.max_daily_loss}, max_positions={self.max_positions}, "
+            f"telegram_enabled={self.enable_telegram}"
         )
 
     def validate_trade(
@@ -289,23 +300,31 @@ class RiskManager:
                 f"All trading halted. Manual intervention required."
             )
 
-            # Telegram alert (using synchronous wrapper to avoid asyncio.run crash)
-            try:
-                from src.alerts.telegram import TelegramBot
+            # Telegram alert (only if enabled)
+            if self.enable_telegram:
+                try:
+                    # Use existing bot instance or create new one
+                    if self.telegram_bot is None:
+                        from src.alerts.telegram import TelegramBot
 
-                telegram = TelegramBot()
-                # Format kill-switch message manually
-                message = (
-                    f"🛑 *KILL-SWITCH ACTIVATED* 🛑\n\n"
-                    f"Daily Loss: `{daily_loss:.2f}` USDT\n"
-                    f"Limit: `{-self.max_daily_loss:.2f}` USDT\n"
-                    f"Utilization: `{abs(daily_loss / self.max_daily_loss * 100):.1f}%`\n\n"
-                    f"⚠️ *All trading halted. Manual intervention required.*\n"
-                    f"Reason: {reason}"
-                )
-                telegram.send_message_sync(message)
-            except Exception as e:
-                logger.error(f"Failed to send Telegram kill-switch alert: {e}")
+                        self.telegram_bot = TelegramBot()
+
+                    # Only send if bot is properly configured
+                    if self.telegram_bot and self.telegram_bot.enabled:
+                        # Format kill-switch message manually
+                        message = (
+                            f"🛑 *KILL-SWITCH ACTIVATED* 🛑\n\n"
+                            f"Daily Loss: `{daily_loss:.2f}` USDT\n"
+                            f"Limit: `{-self.max_daily_loss:.2f}` USDT\n"
+                            f"Utilization: `{abs(daily_loss / self.max_daily_loss * 100):.1f}%`\n\n"
+                            f"⚠️ *All trading halted. Manual intervention required.*\n"
+                            f"Reason: {reason}"
+                        )
+                        self.telegram_bot.send_message_sync(message)
+                    else:
+                        logger.info("Telegram bot not configured - skipping kill-switch alert")
+                except Exception as e:
+                    logger.error(f"Failed to send Telegram kill-switch alert: {e}")
 
             # Immutable audit trail
             self._write_audit_log(

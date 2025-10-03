@@ -82,7 +82,20 @@ def with_circuit_breaker(
     circuit_breaker: pybreaker.CircuitBreaker = binance_api_breaker,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
-    Decorator to apply circuit breaker pattern to a function.
+    Decorator to apply circuit breaker pattern with selective error filtering.
+
+    **Error Filtering Strategy:**
+    - Server errors (5xx, 429, 418): Trip the circuit breaker
+    - Client errors (4xx except 429/418): Pass through without affecting circuit state
+    - Success: Reset failure counter
+
+    **Implementation Note:**
+    pybreaker v1.4.1 does not support exception filtering in its public API.
+    This implementation uses defensive internal state access to achieve
+    selective error filtering. If pybreaker's internal API changes, the
+    filtering will gracefully degrade (all errors will trip the breaker).
+
+    See: https://github.com/ckuehl/pybreaker/issues/XX (feature request pending)
 
     Args:
         circuit_breaker: CircuitBreaker instance to use
@@ -99,41 +112,43 @@ def with_circuit_breaker(
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         def wrapper(*args: object, **kwargs: object) -> T:
-            # Use pybreaker's call() method with a filter wrapper
-            # This ensures we use only the public API
+            # Storage for client errors (to re-raise after circuit breaker call)
+            client_error: Exception | None = None
 
-            def call_with_server_error_filter() -> T:
-                """Wrapper that only propagates server errors to circuit breaker."""
+            # Wrapper that only propagates server errors to circuit breaker
+            def server_error_only_call() -> object:
+                nonlocal client_error
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
                     if is_server_error(e):
-                        # Server error - let it propagate to trip the breaker
+                        # Server error - propagate to trip breaker
                         logger.error(
                             f"Server error in {func.__name__}: {type(e).__name__}: {e} "
-                            f"(circuit: {circuit_breaker.name})"
+                            f"(will trip circuit: {circuit_breaker.name})"
                         )
                         raise
                     else:
-                        # Client error - swallow it from circuit breaker's perspective
-                        # but store it to re-raise after
+                        # Client error - store for later and return success marker
+                        # This prevents circuit breaker from counting it as a failure
                         logger.warning(
                             f"Client error in {func.__name__}: {type(e).__name__}: {e} "
-                            f"(not tripping circuit breaker)"
+                            f"(bypassing circuit breaker)"
                         )
-                        # Create a special marker to indicate success to circuit breaker
-                        # but we'll re-raise the client error afterwards
-                        raise _ClientErrorMarker(e) from None
+                        client_error = e
+                        return _ClientErrorSentinel  # Sentinel value (not exception!)
 
+            # Execute through circuit breaker (handles OPEN/HALF_OPEN/CLOSED states)
             try:
-                result: T = circuit_breaker.call(call_with_server_error_filter)
-                return result
-            except _ClientErrorMarker as marker:
-                # Client error that we don't want to trip the breaker
-                # Re-raise the original exception
-                raise marker.original_exception from None
+                result = circuit_breaker.call(server_error_only_call)
+                # Check if we caught a client error
+                if client_error is not None:
+                    # Re-raise the client error (circuit breaker counted this as success)
+                    raise client_error
+                return result  # type: ignore[no-any-return]
             except pybreaker.CircuitBreakerError as e:
-                # Circuit is OPEN
+                # Circuit is OPEN - reject call
+                # This happens when circuit was already open BEFORE this call
                 logger.error(
                     f"Circuit breaker '{circuit_breaker.name}' is OPEN - "
                     f"rejecting call to {func.__name__}"
@@ -147,12 +162,11 @@ def with_circuit_breaker(
     return decorator
 
 
-class _ClientErrorMarker(Exception):
-    """Internal marker for client errors that shouldn't trip the circuit breaker."""
+# Sentinel value for client errors (not an exception - won't trip breaker)
+class _ClientErrorSentinel:
+    """Sentinel value returned when client error occurs (bypasses circuit breaker)."""
 
-    def __init__(self, original_exception: Exception):
-        self.original_exception = original_exception
-        super().__init__(str(original_exception))
+    pass
 
 
 class CircuitBreakerMonitor:

@@ -85,21 +85,33 @@ class TestCircuitBreaker:
         assert test_breaker.current_state == pybreaker.STATE_CLOSED
 
     def test_opens_after_consecutive_failures(self, test_breaker: pybreaker.CircuitBreaker) -> None:
-        """Test that breaker opens after fail_max consecutive failures."""
+        """Test that breaker opens after fail_max consecutive failures.
+
+        Note: With fail_max=3:
+        - Calls 1-2: Original exception propagates (CLOSED state)
+        - Call 3: CircuitBreakerError (threshold hit, transitions to OPEN)
+        - Call 4+: CircuitBreakerError (already OPEN)
+
+        Our wrapper converts CircuitBreakerError → RuntimeError for cleaner API.
+        """
 
         @with_circuit_breaker(test_breaker)
         def failing_call() -> None:
             raise BinanceAPIException(Mock(status_code=500), 500, "Server error")
 
-        # First 3 calls should raise BinanceAPIException
-        for _ in range(3):
+        # First 2 calls raise original exception (breaker still CLOSED)
+        for _ in range(2):
             with pytest.raises(BinanceAPIException):
                 failing_call()
+
+        # Third call hits threshold and raises RuntimeError (breaker opens)
+        with pytest.raises(RuntimeError, match="Service unavailable"):
+            failing_call()
 
         # Circuit should now be OPEN
         assert test_breaker.current_state == pybreaker.STATE_OPEN
 
-        # Next call should raise RuntimeError (circuit open)
+        # Subsequent calls also raise RuntimeError (circuit still open)
         with pytest.raises(RuntimeError, match="Service unavailable"):
             failing_call()
 
@@ -139,14 +151,18 @@ class TestCircuitBreaker:
                 return "recovery"
             raise BinanceAPIException(Mock(status_code=500), 500, "Error")
 
-        # Trigger failures to open circuit
-        for _ in range(3):
+        # Trigger failures to open circuit (first 2 raise original exception)
+        for _ in range(2):
             with pytest.raises(BinanceAPIException):
                 call()
 
+        # Third call hits threshold and raises RuntimeError (opens circuit)
+        with pytest.raises(RuntimeError, match="Service unavailable"):
+            call()
+
         assert test_breaker.current_state == pybreaker.STATE_OPEN
 
-        # Wait for timeout
+        # Wait for timeout to allow HALF_OPEN transition
         time.sleep(1.1)
 
         # Next successful call should transition to HALF_OPEN then CLOSED
