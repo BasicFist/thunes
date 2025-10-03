@@ -149,6 +149,43 @@ order_params = filters.prepare_market_order(
 
 **Testing**: Always run `pytest tests/test_filters.py -v` after modifying order logic.
 
+### Circuit Breaker Pattern
+
+**Location**: `src/utils/circuit_breaker.py`
+
+Protects against cascading failures by temporarily halting operations after repeated errors:
+
+**States**:
+- **CLOSED**: Normal operation (requests pass through)
+- **OPEN**: Blocking all requests (after failure threshold exceeded)
+- **HALF_OPEN**: Testing recovery (allows 1 request to check if service recovered)
+
+**Configuration**:
+```python
+# Decorator usage (most common)
+from src.utils.circuit_breaker import with_circuit_breaker
+
+@with_circuit_breaker()
+def fetch_market_data(symbol: str) -> dict:
+    # If this fails 5 times in 60s, circuit opens for 30s
+    return binance_client.get_ticker(symbol=symbol)
+
+# Manual usage
+from src.utils.circuit_breaker import circuit_monitor
+
+if circuit_monitor.is_open("binance_api"):
+    logger.warning("Circuit breaker open - skipping API call")
+    return None
+```
+
+**Critical Bug Fixed** (2025-10-03, commit `b7ffc1f`):
+- Fixed thread-unsafe `last_failure_time` (now uses `threading.Lock`)
+- Added state transition validation (`OPEN` → `HALF_OPEN` → `CLOSED`)
+- Fixed premature circuit reopening on partial recovery
+
+**Integration with Risk Manager**:
+The RiskManager automatically checks circuit breaker status before validating trades (see `validate_trade()` step 7).
+
 ### GPU Infrastructure
 
 **Status**: ✅ Implemented but **NOT recommended for daily trading**
@@ -253,9 +290,9 @@ COOL_DOWN_MINUTES=60
 | 4 | Optimization | ✅ | `src/optimize/run_optuna.py` |
 | 5 | Paper Trading | ✅ | `src/live/paper_trader.py` |
 | 6 | Order Filters | ✅ | `src/filters/exchange_filters.py` |
-| 7 | WebSocket Streaming | 🚧 | `src/data/ws_stream.py` (to create) |
-| 8 | Risk Management | 🚧 | `src/risk/manager.py` (to create) |
-| 9 | Alerts | 🚧 | `src/alerts/telegram.py` (to create) |
+| 7 | WebSocket Streaming | ✅ | `src/data/ws_stream.py` |
+| 8 | Risk Management | ✅ | `src/risk/manager.py` |
+| 9 | Alerts | ✅ | `src/alerts/telegram.py` |
 | 10 | Orchestration | 🚧 | APScheduler jobs |
 | 11 | Observability | 🚧 | Prometheus metrics |
 | 12 | CI/CD | ✅ | `.github/workflows/*.yml` |
@@ -264,34 +301,79 @@ COOL_DOWN_MINUTES=60
 
 **Legend**: ✅ Complete | 🚧 In Progress | ⏳ Pending
 
-### Phase 7: WebSocket Streaming (Next Priority)
+**Recent Progress** (as of 2025-10-03):
+- ✅ Phase 7 (WebSocket): Fully operational with reconnection, health monitoring, and REST fallback
+- ✅ Phase 8 (Risk Manager): Kill-switch, audit trail, position limits, cool-down periods
+- ✅ Phase 9 (Telegram): Async alerts for kill-switch, daily summaries, parameter decay
 
-**Goal**: Real-time bookTicker/aggTrade for faster signal detection
+### Phase 7: WebSocket Streaming ✅ COMPLETED
+
+**Status**: Fully implemented with production-grade resilience features
+
+**Implementation**: `src/data/ws_stream.py`
+
+**Key Features**:
+- Real-time bookTicker stream (best bid/ask prices)
+- Automatic reconnection with exponential backoff (max 5 attempts)
+- Connection health monitoring via watchdog thread (60s timeout)
+- Graceful REST API fallback when WebSocket unavailable
+- Thread-safe data access with locks
+
+**Usage Pattern**:
+```python
+from src.data.ws_stream import BinanceWebSocketStream
+
+# Context manager (auto start/stop)
+with BinanceWebSocketStream(symbol="BTCUSDT", testnet=True) as ws:
+    if ws.is_connected():
+        mid_price = ws.get_mid_price()
+    else:
+        # Automatic REST fallback
+        mid_price = ws.get_latest_price_with_fallback()
+```
+
+**Testing**: Run `pytest tests/test_ws_stream.py -v` to verify reconnection and health monitoring
+
+### Phase 10: Orchestration (Next Priority)
+
+**Goal**: Automated scheduling of trading operations with anti-overlap protection
 
 **Implementation Pattern**:
 ```python
-# src/data/ws_stream.py (to create)
-from binance.streams import ThreadedWebsocketManager
+# src/orchestration/scheduler.py (to create)
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.base import JobLookupError
 
-class BinanceWSStream:
-    def __init__(self, symbol: str):
-        self.twm = ThreadedWebsocketManager(api_key=..., api_secret=...)
-        self.twm.start()
+class TradingScheduler:
+    def __init__(self):
+        self.scheduler = BackgroundScheduler()
 
-    def start_book_ticker(self, callback):
-        self.twm.start_symbol_book_ticker_socket(
-            callback=callback,
-            symbol=self.symbol
+    def schedule_signal_check(self, interval_minutes: int = 5):
+        """Check for entry signals every N minutes."""
+        self.scheduler.add_job(
+            func=self._check_signals,
+            trigger="interval",
+            minutes=interval_minutes,
+            id="signal_check",
+            replace_existing=True,
+            max_instances=1  # Anti-overlap
         )
 
-    # Implement reconnection logic (exponential backoff)
-    # Add ping/pong watchdog for connection health
+    def schedule_daily_summary(self, hour: int = 23):
+        """Send daily summary at specified hour (UTC)."""
+        self.scheduler.add_job(
+            func=self._send_daily_summary,
+            trigger="cron",
+            hour=hour,
+            minute=0
+        )
 ```
 
-**Testing Requirements**:
-- 1+ hour stability test
-- Reconnection after network interruption
-- Graceful degradation to REST if WebSocket fails
+**Requirements**:
+- Anti-overlap: Only 1 signal check at a time
+- Graceful shutdown: Wait for jobs to complete
+- Persistent job store (SQLite) for crash recovery
+- Timezone-aware scheduling (UTC)
 
 ## Code Quality & Standards
 
@@ -329,11 +411,33 @@ def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
 - **Benchmarks**: Performance-critical paths (GPU vs CPU)
 - **Coverage target**: >80% (enforced in CI)
 
+**Test Suite Organization** (`tests/`):
+```bash
+# Critical component tests (run these frequently)
+pytest tests/test_filters.py -v              # Order filter validation
+pytest tests/test_risk_manager.py -v         # Kill-switch, limits, cool-down
+pytest tests/test_circuit_breaker.py -v      # Fault tolerance
+pytest tests/test_rate_limiter.py -v         # API rate limits
+pytest tests/test_ws_stream.py -v            # WebSocket reconnection
+
+# Integration tests
+pytest tests/test_paper_trader_integration.py -v
+
+# Performance benchmarks
+python tests/benchmarks/gpu_vs_cpu_benchmark.py
+```
+
 **Run tests before committing**:
 ```bash
-make test           # Full test suite
-make pre-commit     # All quality checks
+make test           # Full test suite with coverage
+make pre-commit     # All quality checks (lint + format + type-check)
 ```
+
+**Key Test Files**:
+- `test_risk_manager.py`: 29 tests covering kill-switch, limits, audit trail
+- `test_ws_stream.py`: 13 tests for WebSocket reconnection and health monitoring
+- `test_circuit_breaker.py`: 8 tests for fault tolerance patterns
+- `test_telegram.py`: 8 tests for async Telegram notifications
 
 ### Pre-commit Hooks
 
@@ -348,36 +452,113 @@ Automatically run on `git commit`:
 git commit --no-verify -m "WIP: debugging strategy"
 ```
 
-## Risk Management Framework
+## Risk Management Framework ✅
+
+**Status**: Production-ready with audit trail and Telegram integration
+
+**Location**: `src/risk/manager.py`
 
 ### Hard Limits (Non-Negotiable)
 
 **Configured in `.env`**:
 ```bash
-MAX_LOSS_PER_TRADE=5.0      # USDT
-MAX_DAILY_LOSS=20.0         # USDT
-MAX_POSITIONS=3             # Concurrent trades
-COOL_DOWN_MINUTES=60        # After loss
+MAX_LOSS_PER_TRADE=5.0      # USDT (maximum single trade size)
+MAX_DAILY_LOSS=20.0         # USDT (kill-switch threshold)
+MAX_POSITIONS=3             # Concurrent open positions
+COOL_DOWN_MINUTES=60        # Pause trading after loss
 ```
 
-**Implementation Pattern (Phase 8)**:
+### Risk Manager Features
+
+1. **Kill-Switch** (automatic trading halt):
+   - Triggers when daily loss ≥ MAX_DAILY_LOSS
+   - Sends Telegram alert with loss details
+   - Writes immutable audit trail entry
+   - Requires manual deactivation
+
+2. **Position Limits**:
+   - Max 3 concurrent positions (prevents over-exposure)
+   - Prevents duplicate positions for same symbol
+   - Checks position count before every BUY order
+
+3. **Cool-Down Period**:
+   - 60-minute pause after closing losing trade
+   - Prevents emotional revenge trading
+   - Automatically cleared on winning trade
+
+4. **Audit Trail** (`logs/audit_trail.jsonl`):
+   - Immutable JSONL format (one JSON object per line)
+   - Logs all trade approvals/rejections with reason
+   - Includes kill-switch activations/deactivations
+   - Regulatory compliance ready
+
+### Usage Pattern
+
 ```python
-# src/risk/manager.py (to create)
-class RiskManager:
-    def validate_trade(self, quote_qty: float) -> tuple[bool, str]:
-        # Check daily loss limit
-        if self.daily_loss >= settings.max_daily_loss:
-            return False, "KILL_SWITCH: Daily loss limit exceeded"
+from src.risk.manager import RiskManager
+from src.models.position import PositionTracker
 
-        # Check per-trade limit
-        if quote_qty > settings.max_loss_per_trade:
-            return False, f"Trade size {quote_qty} exceeds max {settings.max_loss_per_trade}"
+# Initialize (with optional Telegram bot)
+position_tracker = PositionTracker()
+risk_manager = RiskManager(
+    position_tracker=position_tracker,
+    enable_telegram=True  # Send kill-switch alerts
+)
 
-        # Check position count
-        if len(self.open_positions) >= settings.max_positions:
-            return False, "Max position limit reached"
+# Validate trade before execution
+is_valid, reason = risk_manager.validate_trade(
+    symbol="BTCUSDT",
+    quote_qty=10.0,
+    side="BUY",
+    strategy_id="sma_crossover"
+)
 
-        return True, "OK"
+if not is_valid:
+    logger.error(f"Trade rejected: {reason}")
+    return
+
+# After closing position
+if position.pnl < 0:
+    risk_manager.record_loss()  # Trigger cool-down
+else:
+    risk_manager.record_win()   # Clear cool-down
+
+# Check current risk status
+status = risk_manager.get_risk_status()
+print(f"Daily PnL: {status['daily_pnl']:.2f}")
+print(f"Kill-Switch: {status['kill_switch_active']}")
+print(f"Positions: {status['open_positions']}/{status['max_positions']}")
+```
+
+### Telegram Alerts Integration
+
+**Location**: `src/alerts/telegram.py`
+
+**Setup**:
+1. Create Telegram bot via [@BotFather](https://t.me/botfather)
+2. Get bot token and chat ID
+3. Add to `.env`:
+   ```bash
+   TELEGRAM_BOT_TOKEN=your_bot_token
+   TELEGRAM_CHAT_ID=your_chat_id
+   ```
+
+**Alert Types**:
+- **Kill-Switch**: Immediate notification when daily loss limit exceeded
+- **Parameter Decay**: Warning when strategy Sharpe ratio < 1.0 (critical if < 0.5)
+- **Daily Summary**: 24h performance metrics (PnL, win rate, Sharpe)
+- **Re-Optimization**: Notification when new parameters loaded
+
+**Usage**:
+```python
+from src.alerts.telegram import TelegramBot
+
+# Async usage (in async context)
+bot = TelegramBot()
+await bot.send_kill_switch_alert(daily_loss=-25.0, limit=-20.0)
+
+# Sync usage (for non-async contexts like RiskManager)
+bot.send_message_sync("⚠️ Manual alert: Position closed at loss")
 ```
 
 ### Kill-Switch Testing
@@ -494,6 +675,155 @@ python tests/benchmarks/gpu_vs_cpu_benchmark.py
    DEFAULT_QUOTE_AMOUNT=5.0  # Reduce from 10.0
    ```
 
+### WebSocket Not Reconnecting
+
+**Symptoms**: WebSocket disconnects and doesn't reconnect automatically
+
+**Debug steps**:
+```bash
+# 1. Check WebSocket logs
+tail -f logs/*.log | grep -i "websocket\|watchdog"
+
+# 2. Run health monitoring test
+pytest tests/test_ws_stream.py::TestWebSocketHealthMonitor -v
+
+# 3. Verify reconnection logic
+pytest tests/test_ws_stream.py::TestBinanceWebSocketStream::test_reconnection_on_error -v
+```
+
+**Common causes**:
+- Network firewall blocking WebSocket connections
+- Testnet API keys expired
+- Watchdog timeout too aggressive (increase `timeout_seconds` if on slow network)
+
+### Kill-Switch Not Triggering
+
+**Symptoms**: Daily loss exceeds limit but trading continues
+
+**Debug steps**:
+```bash
+# 1. Check risk manager state
+python -c "
+from src.risk.manager import RiskManager
+from src.models.position import PositionTracker
+rm = RiskManager(position_tracker=PositionTracker())
+print(f'Kill-switch active: {rm.kill_switch_active}')
+print(f'Daily PnL: {rm.get_daily_pnl():.2f}')
+print(f'Limit: {rm.max_daily_loss:.2f}')
+"
+
+# 2. Check audit trail
+tail -20 logs/audit_trail.jsonl | jq '.'
+
+# 3. Test kill-switch manually
+pytest tests/test_risk_manager.py::TestRiskManager::test_kill_switch_activation -v
+```
+
+### Telegram Alerts Not Sending
+
+**Symptoms**: No Telegram notifications despite events triggering
+
+**Debug steps**:
+```bash
+# 1. Verify credentials in .env
+grep TELEGRAM .env
+
+# 2. Test bot configuration
+python -c "
+from src.alerts.telegram import TelegramBot
+bot = TelegramBot()
+print(f'Enabled: {bot.enabled}')
+print(f'Chat ID: {bot.chat_id}')
+result = bot.send_message_sync('Test message from THUNES')
+print(f'Sent successfully: {result}')
+"
+
+# 3. Check Telegram API connectivity
+curl -X GET "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getMe"
+```
+
+**Common causes**:
+- Missing `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID` in `.env`
+- Bot not added to chat or chat ID incorrect
+- Firewall blocking api.telegram.org
+
+## Known Critical Issues ⚠️
+
+**Status**: Identified in 2025-10-03 code review - **MUST FIX before Phase 13**
+
+### High-Risk Findings (Execution-Critical)
+
+1. **WebSocket Watchdog Deadlock** (`src/data/ws_stream.py:62-105`):
+   - **Issue**: Watchdog thread calls `stop()` which joins itself → deadlock
+   - **Impact**: After first reconnection, health monitoring permanently disabled
+   - **Fix**: Enqueue reconnect signal to control thread instead of calling `_attempt_reconnect()` directly
+   ```python
+   # BEFORE (broken):
+   def watchdog_loop():
+       if not self.is_healthy():
+           self._attempt_reconnect()  # Calls stop() which joins this thread!
+
+   # AFTER (fixed):
+   def watchdog_loop():
+       if not self.is_healthy():
+           reconnect_queue.put("reconnect")  # Signal only, no blocking
+   ```
+
+2. **Incomplete Audit Trail** (`src/risk/manager.py:68-225`):
+   - **Issue**: Several early-return paths skip `_write_audit_log()`
+   - **Impact**: Undermines "immutable audit trail" claim for regulatory compliance
+   - **Fix**: Centralize all decisions through `_approve_trade()` / `_reject_trade()` helpers
+   ```python
+   def _reject_trade(self, reason: str, details: dict) -> tuple[bool, str]:
+       self._write_audit_log(event="TRADE_REJECTED", details={**details, "reason": reason})
+       return False, reason
+
+   # Then use: return self._reject_trade("kill_switch_active", {...})
+   ```
+
+3. **Async Kill-Switch Alert Crash** (`src/risk/manager.py:305-327`):
+   - **Issue**: `asyncio.run()` crashes if event loop already running
+   - **Impact**: Kill-switch can fail silently during active trading
+   - **Fix**: Already partially fixed with `send_message_sync()`, but need to respect `enable_telegram` flag
+   ```python
+   # Line 304-313: Check enable_telegram BEFORE creating bot
+   if self.enable_telegram and self.telegram_bot:
+       # Only send if explicitly enabled
+   ```
+
+4. **Circuit Breaker Private API Abuse** (`src/utils/circuit_breaker.py:150-180`):
+   - **Issue**: Decorator accesses `._state` directly, bypassing public API
+   - **Impact**: Future refactoring breaks decorator; listeners never fire
+   - **Fix**: Use public `record_success()` / `record_failure()` methods only
+   ```python
+   # BEFORE: if breaker._state == CircuitState.OPEN
+   # AFTER:  if breaker.is_open():
+   ```
+
+### Medium-Risk Issues
+
+5. **WebSocket Callback Thread Blocking** (`src/data/ws_stream.py:181-198`):
+   - **Issue**: Heavy work in `_handle_message()` blocks receive loop
+   - **Impact**: Missed ticks during processing, false health failures
+   - **Fix**: Enqueue messages to processing queue, handle in separate thread
+
+6. **Missing Concurrency Tests**:
+   - No tests for watchdog restart, control-thread reconnection
+   - No chaos tests for circuit breaker state transitions
+   - Add: `tests/test_ws_stream_concurrency.py`, `tests/test_circuit_breaker_chaos.py`
+
+### Compliance Gaps
+
+7. **Audit Schema Not Versioned**:
+   - Current JSONL has no schema version or event ID
+   - Add Pydantic models: `AuditEvent(event_id, version, strategy_id, model_hash, ...)`
+   - Reference: `src/models/audit_schema.py` (to create)
+
+8. **No Prometheus Metrics**:
+   - Missing: kill-switch state, circuit breaker status, reconnect counts
+   - Missing: order rejections by reason, REST fallback counts
+   - Reference: Phase 11 (Observability)
+
 ## Important Reminders
 
 ### Safety Checklist
@@ -529,15 +859,318 @@ close = df["close"].shift(1)  # Use previous bar for signal generation
 price = df["close"] * (1 + slippage)  # e.g., slippage=0.0005 (0.05%)
 ```
 
+## AI/ML Roadmap (Post-Phase 14)
+
+**Philosophy**: CPU-first serving, GPU-only training. Keep live inference <10ms, move research offline.
+
+### Signal Modeling
+
+**1. Event Labeling - Triple Barrier Method**
+
+Location: `src/models/labeling.py` (to create)
+
+Assigns supervised labels based on profit-take/stop-loss/horizon outcomes:
+```python
+def triple_barrier_label(df: pd.DataFrame, pt: float = 0.02, sl: float = 0.01,
+                          horizon: int = 24) -> pd.Series:
+    """
+    Label each bar as:
+    - 1 (profit-take hit first)
+    - -1 (stop-loss hit first)
+    - 0 (horizon expired before either)
+    """
+    # Used to train "probability of profit before loss" classifiers
+```
+
+**Integration**: Extend `src/backtest/strategy.py:179` to generate supervised datasets during backtesting.
+
+**2. Order Flow Features**
+
+Location: Extend `src/data/ws_stream.py:97` to support depth streams
+
+Microstructure signals from WebSocket orderbook:
+- Order Flow Imbalance (OFI): `(bid_vol - ask_vol) / (bid_vol + ask_vol)`
+- Depth imbalance by levels (L1-L5)
+- Realized volatility (rolling 50-100 ticks)
+- Spread regime classification
+
+**3. Short-Horizon Predictors**
+
+Location: `src/models/xgb_signal.py` (to create)
+
+Fast XGBoost/LightGBM models predicting:
+- Sign of next 1-5 bar mid-price move
+- Probability of profit within horizon
+- Expected return per trade
+
+**Serving**: CPU inference (<5ms p95), ONNX export optional for quantization
+
+### Regime & Ensemble
+
+**1. Regime Detection**
+
+Location: `src/models/regime.py` (already exists - enhance)
+
+Use River's drift detectors + volatility bands:
+```python
+from river.drift import ADWIN, PageHinkley
+
+class RegimeDetector:
+    def __init__(self):
+        self.drift_detector = ADWIN()
+        self.volatility_thresholds = {"low": 0.01, "high": 0.03}
+
+    def classify(self, price_returns: float, spread: float) -> str:
+        # Returns: "trend" | "range" | "shock"
+```
+
+**Integration**: Wire into `src/live/paper_trader.py:265` to switch strategies or adjust thresholds (e.g., RSI bounds).
+
+**2. Meta-Labeling (Probability Gate)**
+
+Location: `src/models/meta_labeler.py` (to create)
+
+Primary model generates candidate entries → meta-model predicts "will this trade hit PT before SL?"
+
+**Key Benefit**: Dramatically reduces false positives (30-50% improvement typical)
+
+**Integration**: Insert before `place_market_order()` in `src/live/paper_trader.py:309`:
+```python
+# After strategy signal
+if entries.iloc[-1]:
+    prob_profit = meta_labeler.predict_proba(features)
+    if prob_profit < 0.6:  # Configurable threshold
+        logger.info(f"Meta-labeler rejected trade (p={prob_profit:.2f})")
+        return  # Skip trade
+```
+
+**3. Ensemble Allocation**
+
+Location: `src/models/ensemble.py` (to create)
+
+Maintain portfolio of orthogonal signals (SMA/RSI/Donchian/order-flow):
+- Allocate quote across models by calibrated Sharpe ratio
+- Update weights from `src/monitoring/performance_tracker.py:181`
+- Constrain by risk budget (e.g., no model >40% of capital)
+
+**Live Updates**: Reweight every 24h based on rolling 7-day performance
+
+### Execution ML
+
+**1. Liquidity-Aware Sizing (Kelly Criterion)**
+
+Location: `src/models/sizing.py` (to create)
+
+Size positions by expected edge and uncertainty:
+```python
+def kelly_size(prob_win: float, edge: float, max_kelly_fraction: float = 0.25) -> float:
+    """
+    Calibrated probability → Kelly fraction → capped by risk
+
+    Args:
+        prob_win: Calibrated probability of profit (from meta-labeler)
+        edge: Expected return - fees - slippage
+        max_kelly_fraction: Safety cap (0.25 = quarter-Kelly)
+
+    Returns:
+        Position size multiplier
+    """
+```
+
+**Calibration**: Use Platt scaling or Isotonic regression on meta-labeler outputs
+
+**Integration**: Call from `src/live/paper_trader.py:309` before order submission
+
+**2. Slippage Prediction (Future)**
+
+Location: `src/execute/routing.py` (to create)
+
+Learn realized slippage by venue/time-of-day/spread → feed SOR facade for quote splitting
+
+**Start**: Simulated mode, log predicted vs realized slippage per trade
+
+### Risk ML
+
+**1. Predictive Risk Gates**
+
+Extend `src/risk/manager.py:68` to accept model uncertainty:
+```python
+def validate_trade(self, symbol: str, quote_qty: float,
+                   model_confidence: float = 1.0) -> tuple[bool, str]:
+    # Downsize or reject if confidence < threshold
+    if model_confidence < 0.5:
+        adjusted_qty = quote_qty * model_confidence
+        return self.validate_trade(symbol, adjusted_qty, 1.0)
+```
+
+**2. Drift & Decay Monitoring**
+
+Location: `src/monitoring/drift.py` (to create)
+
+- **Feature Drift**: Population Stability Index (PSI) on input distributions
+- **Data Drift**: Kolmogorov-Smirnov test, River's ADWIN
+- **Concept Drift**: Rolling Sharpe degradation (already in `performance_tracker.py:61`)
+
+**Alerts**: Trigger Telegram notification + reduce sizing when thresholds breach
+
+### Backtesting & Optimization
+
+**1. Purged K-Fold Cross-Validation**
+
+Location: `src/backtest/cv.py` (to create)
+
+Prevent leakage per López de Prado's "Advances in Financial Machine Learning":
+```python
+from sklearn.model_selection import KFold
+
+class PurgedKFold:
+    def __init__(self, n_splits: int = 5, embargo_pct: float = 0.01):
+        # Remove overlapping samples + embargo period
+```
+
+**Integration**: Use in `src/optimize/run_optuna.py:16` for model validation
+
+**2. Multi-Objective Optimization**
+
+Extend `src/optimize/run_optuna.py:16` with NSGA-II sampler:
+```python
+study = optuna.create_study(
+    directions=["maximize", "minimize"],  # Sharpe, max_drawdown
+    sampler=NSGAIISampler()
+)
+```
+
+**Outputs**: Pareto frontier of (Sharpe, drawdown) pairs
+
+**3. Walk-Forward Automation**
+
+Convert `walk_forward_test.py:1` into reusable module:
+
+Location: `src/optimize/walk_forward.py` (to create)
+
+Store parameter trajectories and performance to `artifacts/optuna/wf_results.csv`
+
+### Explainability & Governance
+
+**1. Model Registry**
+
+Location: `src/models/registry.py` (to create)
+
+Persist model artifacts with versioning:
+```python
+class ModelRegistry:
+    def save(self, model, version: str, metadata: dict):
+        # Save: weights, feature_schema, calibration_bins, thresholds
+        # Hash: model + params → include in audit trail
+```
+
+**Integration**: Log `model_hash` and `param_hash` in every audit entry (`src/risk/manager.py:202`)
+
+**2. SHAP Explainability**
+
+Location: `src/monitoring/explain.py` (to create)
+
+Generate offline global/per-trade feature attributions:
+```bash
+# Artifacts: artifacts/explain/shap_summary_v1.0.html
+# Publish top features per regime for compliance
+```
+
+**3. Audit Schema Versioning**
+
+Location: `src/models/audit_schema.py` (to create)
+
+Pydantic models for immutable audit trail:
+```python
+class AuditEvent(BaseModel):
+    event_id: str  # UUID
+    version: str   # "1.0"
+    timestamp: datetime
+    event: str     # "TRADE_APPROVED" | "KILL_SWITCH_ACTIVATED"
+    strategy_id: str
+    model_hash: str  # SHA256 of model weights
+    param_hash: str  # SHA256 of parameters
+    decision_inputs: dict
+    decision_outputs: dict
+```
+
+### Serving & Performance
+
+**1. ONNX Runtime (Optional)**
+
+Location: `src/models/onnx_runtime.py` (to create)
+
+Export models to ONNX for quantization (float16/int8):
+- Target: p95 inference <5-10ms on production hardware
+- Test: `python tests/benchmarks/onnx_vs_native_benchmark.py`
+
+**2. Streaming Feature Store**
+
+Location: `src/data/feature_store.py` (to create)
+
+Maintain rolling windows (50-200 bars) in memory:
+- Snapshot to Parquet (DuckDB) periodically for retraining
+- Consistent train/serve transforms (sklearn `ColumnTransformer` saved once)
+
+### Metrics & SLAs
+
+Extend `src/monitoring/performance_tracker.py:181`:
+
+**Model Metrics**:
+- Calibration: Expected Calibration Error (ECE), Brier score
+- Classification: AUC-PR for tails, hit ratio by horizon
+- Regression: RMSE, MAE on realized PnL vs predicted
+- Slippage: Realized vs predicted per trade
+
+**Operational Metrics** (Phase 11 - Prometheus):
+- Regime changes per day
+- Model confidence distribution (p50/p90/p99)
+- Calibration drift alerts
+- Inference latency (p50/p95/p99)
+
+### Integration Timeline
+
+**Phase 15** (Post-Live, 1-2 months):
+1. Add labeling + regime modules
+2. Generate supervised datasets in backtests
+3. Train XGBoost signal model (offline GPU)
+4. Insert meta-labeler gate before order execution
+
+**Phase 16** (3-4 months):
+1. Add depth features to WebSocket stream
+2. Implement liquidity-aware sizing (Kelly)
+3. Log realized vs predicted slippage
+
+**Phase 17** (4-6 months):
+1. Multi-objective Optuna with purged CV
+2. Model registry with versioned audit trail
+3. SHAP dashboards for compliance
+
+**Phase 18** (6-12 months):
+1. Ensemble allocation across multiple strategies
+2. Automated walk-forward re-optimization
+3. SOR facade with cost model (simulated)
+
+**Constraints**:
+- All live inference must be CPU-only (<10ms p95)
+- GPU reserved for offline training and research
+- Model changes require Phase 13-style 7-day paper validation
+
 ## Key Technologies & Documentation
 
+**Core Stack**:
 - **Backtesting**: [vectorbt](https://vectorbt.dev/) - Vectorized portfolio simulation
-- **Optimization**: [Optuna](https://optuna.org/) - Bayesian hyperparameter tuning (TPE)
+- **Optimization**: [Optuna](https://optuna.org/) - Bayesian hyperparameter tuning (TPE, NSGA-II)
 - **Exchange**: [python-binance](https://github.com/sammchardy/python-binance) - Binance API wrapper
-- **ML**: [XGBoost](https://xgboost.readthedocs.io/) - Gradient boosting (GPU-accelerated)
-- **GPU**: [RAPIDS cuDF](https://docs.rapids.ai/api/cudf/stable/) - GPU DataFrames (60-100x speedup on HFT data)
 - **Monitoring**: Prometheus + Loki (Phase 11)
 - **Scheduling**: APScheduler (Phase 10)
+
+**ML Stack** (Phase 15+):
+- **Models**: [XGBoost](https://xgboost.readthedocs.io/), [LightGBM](https://lightgbm.readthedocs.io/), [River](https://riverml.xyz/)
+- **Explainability**: [SHAP](https://shap.readthedocs.io/) - Feature attribution for compliance
+- **Drift**: River ADWIN, PSI, Kolmogorov-Smirnov
+- **GPU (Research Only)**: [RAPIDS cuDF](https://docs.rapids.ai/api/cudf/stable/) - 60-100x speedup on HFT data
+- **Serving**: ONNX Runtime (optional quantization)
 
 ## Additional Resources
 
@@ -548,4 +1181,20 @@ price = df["close"] * (1 + slippage)  # e.g., slippage=0.0005 (0.05%)
 
 ---
 
-**Last Updated**: 2025-10-02 by Claude Code
+**Last Updated**: 2025-10-03 by Claude Code
+
+**Changelog**:
+- 2025-10-03: **MAJOR UPDATE** - Added "Known Critical Issues" section (8 high/medium-risk bugs)
+- 2025-10-03: **MAJOR ADDITION** - Comprehensive AI/ML Roadmap (Phases 15-18)
+  - Signal modeling: Triple-barrier labeling, order-flow features, short-horizon predictors
+  - Regime & ensemble: ADWIN drift detection, meta-labeling gates, multi-strategy allocation
+  - Execution ML: Kelly sizing, slippage prediction, liquidity-aware routing
+  - Risk ML: Predictive gates, drift monitoring (PSI/KS/ADWIN)
+  - Governance: Model registry, SHAP explainability, versioned audit schemas
+  - Timeline: 1-12 months post-live deployment
+- 2025-10-03: Added Circuit Breaker pattern documentation with bug fix notes
+- 2025-10-03: Updated Phase 7-9 status (WebSocket, Risk Manager, Telegram completed)
+- 2025-10-03: Added comprehensive troubleshooting for new components
+- 2025-10-03: Added detailed usage patterns for RiskManager and WebSocket
+- 2025-10-03: Updated test suite organization with test counts
+- 2025-10-02: Initial comprehensive documentation
