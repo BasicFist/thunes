@@ -52,7 +52,7 @@ logs/*.log
 *.log
 
 # Artifacts (optionally track some)
-artifacts/*.csv
+artifacts/**/*.csv
 artifacts/**/*.png
 artifacts/**/*.html
 
