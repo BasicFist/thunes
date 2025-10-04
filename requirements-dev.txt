@@ -1,0 +1,28 @@
+# THUNES Development Dependencies (Testing/Linting)
+# Required for development, testing, and CI/CD
+# Install: pip install -r requirements-dev.txt
+# Note: This includes requirements-core.txt
+
+-r requirements-core.txt
+
+# Testing Framework
+pytest==8.4.2
+pytest-asyncio==1.2.0
+pytest-cov==7.0.0
+pytest-mock==3.15.1
+coverage==7.10.7
+pluggy==1.6.0
+iniconfig==2.1.0
+
+# Type Checking
+mypy==1.18.2
+mypy_extensions==1.1.0
+typing-inspection==0.4.2
+
+# Code Formatting
+black==24.3.0
+pathspec==0.12.1
+platformdirs==4.4.0
+
+# Utilities
+anyio==4.11.0  # Async test support

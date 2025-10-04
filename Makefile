@@ -1,13 +1,31 @@
-.PHONY: help install test lint format backtest optimize paper clean
+.PHONY: help install install-core install-research install-dev install-all test lint format backtest optimize paper clean
 
 help:  ## Show this help message
 	@echo "Available commands:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-install:  ## Install dependencies
+install-core:  ## Install core dependencies only (production runtime ~400 MB)
 	python -m pip install --upgrade pip
-	pip install -r requirements.txt
+	pip install -r requirements-core.txt
+
+install-research:  ## Install research dependencies (includes core + backtest/optimize)
+	python -m pip install --upgrade pip
+	pip install -r requirements-research.txt
+
+install-dev:  ## Install development dependencies (includes core + testing/linting)
+	python -m pip install --upgrade pip
+	pip install -r requirements-dev.txt
 	pre-commit install
+
+install-all:  ## Install all dependencies (core + research + dev)
+	python -m pip install --upgrade pip
+	pip install -r requirements-research.txt -r requirements-dev.txt
+	pre-commit install
+
+install:  ## Alias for install-all (backward compatibility)
+	@echo "⚠️  Using 'make install-all' for complete installation"
+	@echo "💡 Tip: Use 'make install-core' for production, 'make install-dev' for development"
+	$(MAKE) install-all
 
 test:  ## Run tests
 	pytest -v --cov=src --cov-report=term-missing

@@ -1,0 +1,65 @@
+# THUNES Research Dependencies (Backtest/Optimization)
+# Required for strategy development, backtesting, and parameter optimization
+# Install: pip install -r requirements-research.txt
+# Note: This includes requirements-core.txt
+
+-r requirements-core.txt
+
+# Backtesting Framework
+vectorbt==0.28.1
+
+# Hyperparameter Optimization
+optuna==4.5.0
+
+# Machine Learning & Statistics
+scikit-learn==1.5.0
+scipy==1.16.0
+hmmlearn==0.3.3  # Hidden Markov Models for regime detection
+river==0.22.0  # Online machine learning
+joblib==1.5.2  # Parallel processing
+threadpoolctl==3.6.0
+
+# Numerical Computing
+numba==0.62.1  # JIT compilation for performance
+llvmlite==0.45.1  # LLVM backend for numba
+
+# Visualization
+matplotlib==3.10.6
+matplotlib-inline==0.1.7
+plotly==6.3.0
+pillow==11.3.0  # Image support for charts
+imageio==2.37.0  # Animation support
+fonttools==4.60.1
+kiwisolver==1.4.9
+cycler==0.12.1
+contourpy==1.3.3
+pyparsing==3.2.5
+
+# Jupyter & Interactive Analysis
+ipython==9.6.0
+ipywidgets==8.1.7
+jupyterlab_widgets==3.0.15
+widgetsnbextension==4.0.14
+ipython_pygments_lexers==1.1.1
+traitlets==5.14.3
+comm==0.2.3
+decorator==5.2.1
+jedi==0.19.2
+parso==0.8.5
+prompt_toolkit==3.0.52
+Pygments==2.19.2
+stack-data==0.6.3
+executing==2.2.1
+pure_eval==0.2.3
+asttokens==3.0.0
+wcwidth==0.2.14
+pexpect==4.9.0
+ptyprocess==0.7.0
+
+# Serialization & Pickling
+dill==0.4.0  # Extended pickling for complex objects
+pytokens==0.1.10
+
+# Templating (for report generation)
+Mako==1.3.10
+MarkupSafe==3.0.3

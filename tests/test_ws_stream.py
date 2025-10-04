@@ -118,6 +118,8 @@ class TestBinanceWebSocketStream:
 
     def test_handle_message(self, mock_twm: MagicMock) -> None:
         """Test processing incoming WebSocket messages."""
+        import time
+
         stream = BinanceWebSocketStream(symbol="BTCUSDT", testnet=True)
         stream.start()
 
@@ -133,6 +135,10 @@ class TestBinanceWebSocketStream:
 
         stream._handle_message(test_msg)
 
+        # Wait for async processing (message queue → processing thread → _latest_data)
+        # Processing thread has 1s timeout on queue.get(), so 0.1s should be plenty
+        time.sleep(0.1)
+
         # Verify data stored
         ticker = stream.get_latest_ticker()
         assert ticker is not None
@@ -146,6 +152,8 @@ class TestBinanceWebSocketStream:
 
     def test_get_best_bid_ask(self, mock_twm: MagicMock) -> None:
         """Test extracting best bid/ask prices."""
+        import time
+
         stream = BinanceWebSocketStream(symbol="BTCUSDT", testnet=True)
         stream.start()
 
@@ -159,6 +167,9 @@ class TestBinanceWebSocketStream:
             "A": "2.00000000",
         }
         stream._handle_message(test_msg)
+
+        # Wait for async processing
+        time.sleep(0.1)
 
         # Test bid/ask extraction
         assert stream.get_best_bid() == 43000.00

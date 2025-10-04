@@ -148,6 +148,12 @@ class BinanceWebSocketStream:
         self._reconnect_queue: Queue[str] = Queue()
         self._control_thread: Thread | None = None
 
+        # Message queue for decoupling reception from processing
+        # Prevents callback thread blocking if processing becomes heavy
+        self._message_queue: Queue[dict[str, Any]] = Queue(maxsize=100)
+        self._processing_thread: Thread | None = None
+        self._message_overflow_count = 0
+
         # Health monitoring
         self.health_monitor = WebSocketHealthMonitor(timeout_seconds=60)
 
@@ -179,23 +185,57 @@ class BinanceWebSocketStream:
         logger.info("Started ThreadedWebsocketManager")
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
-        """Process incoming WebSocket message.
+        """Receive incoming WebSocket message and enqueue for processing.
+
+        This method runs in the WebSocket receive thread and must be non-blocking.
+        Heavy processing is offloaded to _process_messages() thread.
 
         Args:
             msg: WebSocket message dictionary
         """
-        # Record message for health monitoring
+        # Record message for health monitoring (fast operation)
         self.health_monitor.record_message()
 
-        # Update latest data (thread-safe)
-        with self._data_lock:
-            self._latest_data = msg
+        # Enqueue message for processing (non-blocking)
+        try:
+            self._message_queue.put_nowait(msg)
+        except Exception:  # Queue.Full
+            # Queue full - increment overflow counter and drop message
+            self._message_overflow_count += 1
+            if self._message_overflow_count % 100 == 1:  # Log every 100 drops
+                logger.warning(
+                    f"Message queue full ({self._message_queue.qsize()}/100), "
+                    f"dropped {self._message_overflow_count} messages total. "
+                    "This indicates processing thread is too slow."
+                )
 
-        # Log first message for debugging
-        if not self._connected:
-            logger.info(f"First WebSocket message received: {msg}")
-            self._connected = True
-            self._reconnect_attempts = 0  # Reset on successful connection
+    def _process_messages(self) -> None:
+        """Process messages from queue in dedicated thread.
+
+        This separates heavy processing from the WebSocket receive thread,
+        preventing callback blocking and connection drops.
+        """
+        while not self._stop_event.is_set():
+            try:
+                # Block until message available (with timeout for clean shutdown)
+                msg = self._message_queue.get(timeout=1.0)
+
+                # Update latest data (thread-safe)
+                with self._data_lock:
+                    self._latest_data = msg
+
+                # Log first message for debugging
+                if not self._connected:
+                    logger.info(f"First WebSocket message received: {msg}")
+                    self._connected = True
+                    self._reconnect_attempts = 0  # Reset on successful connection
+
+                # Future: Heavy processing can be added here without blocking WebSocket
+                # Examples: data validation, transformation, database writes, etc.
+
+            except Exception:  # Queue.Empty or other errors
+                # Timeout (expected during shutdown) or processing error
+                continue
 
     def _handle_error(self, msg: dict[str, Any]) -> None:
         """Handle WebSocket error messages.
@@ -258,9 +298,16 @@ class BinanceWebSocketStream:
         """Start WebSocket stream for bookTicker data.
 
         Subscribes to real-time best bid/ask price updates.
+        Starts processing thread for message handling.
         """
         if self._stop_event.is_set():
             self._stop_event.clear()
+
+        # Start message processing thread
+        if self._processing_thread is None or not self._processing_thread.is_alive():
+            self._processing_thread = Thread(target=self._process_messages, daemon=True)
+            self._processing_thread.start()
+            logger.info("Started WebSocket message processing thread")
 
         # Start control thread for reconnection handling
         if self._control_thread is None or not self._control_thread.is_alive():
@@ -304,6 +351,11 @@ class BinanceWebSocketStream:
                 logger.info("Stopped WebSocket stream")
             except Exception as e:
                 logger.error(f"Error stopping WebSocket: {e}")
+
+        # Stop processing thread
+        if self._processing_thread and self._processing_thread.is_alive():
+            self._processing_thread.join(timeout=2.0)
+            logger.info("Stopped message processing thread")
 
         self.twm = None
         self._stream_key = None

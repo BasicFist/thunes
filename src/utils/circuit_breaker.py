@@ -199,7 +199,7 @@ class CircuitBreakerMonitor:
             return False  # Breaker doesn't exist - assume closed
 
         # Direct enum comparison (same pattern as is_any_open)
-        return breaker.current_state == pybreaker.STATE_OPEN
+        return bool(breaker.current_state == pybreaker.STATE_OPEN)
 
     def get_status(self) -> dict[str, dict]:
         """

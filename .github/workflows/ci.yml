@@ -25,7 +25,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+        # Note: Using requirements-dev.txt (core + testing/linting only)
+        # This reduces CI build time from ~10 min to ~2-3 min by excluding
+        # heavy research dependencies (vectorbt, optuna, matplotlib, jupyter)
 
       - name: Run ruff (linting)
         run: ruff check src tests
