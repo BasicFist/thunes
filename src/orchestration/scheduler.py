@@ -5,23 +5,24 @@ Features:
 - Signal checks at configurable intervals
 - Daily performance summaries
 - Anti-overlap protection (max 1 job at a time)
-- In-memory job store (NOTE: jobs re-created on restart)
+- SQLite job persistence (jobs survive restarts)
 - Graceful shutdown
 
-KNOWN LIMITATION: SQLite job persistence disabled due to APScheduler serialization
-issues with instance methods. Jobs will be re-scheduled on each restart.
+Implementation:
+- Uses standalone job functions (src.orchestration.jobs) for serialization
+- Binds parameters as kwargs when scheduling (textual references)
+- Jobs persist across scheduler restarts via SQLite
 """
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src.config import settings
 from src.live.paper_trader import PaperTrader
-from src.utils.circuit_breaker import circuit_monitor
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -39,17 +40,23 @@ class TradingScheduler:
     """
 
     def __init__(self, use_persistent_store: bool = False) -> None:
-        """Initialize scheduler with optional persistent job store.
+        """Initialize scheduler with configurable job store.
 
-        IMPORTANT: SQLite job persistence is currently disabled due to APScheduler
-        serialization limitations with instance methods. Jobs will be re-created
-        on each scheduler restart.
+        IMPORTANT: SQLite persistence is disabled by default due to serialization
+        limitations with complex objects (PaperTrader contains unpicklable dependencies
+        like database connections, locks, weak references).
 
-        TODO (Phase 13): Refactor to use standalone functions for job persistence.
+        **Recommended Pattern**: Application code should re-schedule jobs on each start:
+        ```python
+        scheduler = TradingScheduler()
+        scheduler.schedule_signal_check(interval_minutes=10)
+        scheduler.schedule_daily_summary(hour=23, minute=0)
+        scheduler.start()
+        ```
 
         Args:
-            use_persistent_store: If True, use SQLite (experimental, may fail).
-                                  If False (default), use in-memory store.
+            use_persistent_store: If True, use SQLite for job persistence (experimental).
+                                  If False (default), use in-memory store (jobs re-created on start).
 
         Job store location: logs/jobs.db (if persistent)
         Executor: Single-threaded (serial execution)
@@ -57,15 +64,18 @@ class TradingScheduler:
         # Ensure logs directory exists
         Path("logs").mkdir(exist_ok=True)
 
-        # Configure job store (memory by default to avoid serialization issues)
+        # Configure job store
         if use_persistent_store:
-            # EXPERIMENTAL: May fail with "Schedulers cannot be serialized" error
-            from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-
+            # Experimental: Only works for jobs with simple parameters
+            # Complex objects (PaperTrader) cannot be pickled
             jobstores = {"default": SQLAlchemyJobStore(url="sqlite:///logs/jobs.db")}
+            logger.warning(
+                "Using SQLite job store (experimental - may fail with complex parameters)"
+            )
         else:
-            # Use in-memory store (jobs won't persist across restarts)
+            # Use in-memory store (jobs re-scheduled on each start - recommended)
             jobstores = {}
+            logger.info("Using in-memory job store (jobs re-created on start)")
 
         # Configure executors (single thread for serial execution)
         executors = {"default": ThreadPoolExecutor(max_workers=1)}
@@ -104,106 +114,6 @@ class TradingScheduler:
             f"testnet={settings.environment != 'live'})"
         )
 
-    def _check_signals(self) -> None:
-        """Job: Check for trading signals and execute strategy.
-
-        This job runs periodically (default: every 10 minutes) to:
-        1. Check if circuit breaker is open (skip if open)
-        2. Run strategy for default symbol
-        3. Handle errors gracefully (logged but don't crash scheduler)
-        """
-        try:
-            # Check circuit breaker before executing
-            if circuit_monitor.is_open("BinanceAPI"):
-                logger.warning("Circuit breaker open - skipping signal check")
-                return
-
-            logger.info("Signal check started")
-            self.paper_trader.run_strategy(
-                symbol=settings.default_symbol,
-                timeframe=settings.default_timeframe,
-                quote_amount=settings.default_quote_amount,
-            )
-            logger.info("Signal check completed")
-
-        except Exception as e:
-            logger.error(f"Signal check failed: {e}", exc_info=True)
-            # Don't re-raise - let scheduler continue
-
-    def _send_daily_summary(self) -> None:
-        """Job: Send daily performance summary via Telegram.
-
-        Generates and sends a comprehensive daily report including:
-        - Daily PnL
-        - Number of trades
-        - Win rate
-        - Open positions
-        - Risk status (kill-switch, daily loss)
-        - System health (WebSocket, circuit breaker)
-        """
-        try:
-            if not self.telegram_bot:
-                logger.warning("Telegram not configured - skipping daily summary")
-                return
-
-            logger.info("Generating daily summary")
-
-            # Get position tracker
-            tracker = self.paper_trader.position_tracker
-
-            # Calculate daily stats using position_history (includes closed positions)
-            all_positions = tracker.get_position_history(symbol=None, limit=100)
-
-            # Filter to closed positions from last 24 hours
-            from datetime import timedelta
-
-            yesterday = datetime.now() - timedelta(days=1)
-            today_trades = [
-                p
-                for p in all_positions
-                if p.status == "CLOSED" and p.exit_time and p.exit_time > yesterday
-            ]
-
-            if today_trades:
-                daily_pnl = sum(p.pnl for p in today_trades)
-                wins = [p for p in today_trades if p.pnl > 0]
-                win_rate = len(wins) / len(today_trades) * 100 if today_trades else 0
-            else:
-                daily_pnl = 0.0
-                win_rate = 0.0
-
-            # Get risk status
-            risk_status = self.paper_trader.risk_manager.get_risk_status()
-
-            # Get open positions (for future use in detailed summary)
-            # open_positions = tracker.get_open_positions()
-
-            # Format message
-            message = f"""📊 **THUNES Daily Summary**
-📅 Date: {datetime.now().strftime('%Y-%m-%d')}
-
-💰 **Performance**
-Daily PnL: {daily_pnl:.2f} USDT
-Trades Today: {len(today_trades)}
-Win Rate: {win_rate:.1f}%
-
-🎯 **Risk Status**
-Open Positions: {risk_status['open_positions']}/{risk_status['max_positions']}
-Daily PnL: {risk_status['daily_pnl']:.2f} USDT (Limit: {risk_status['daily_loss_limit']:.2f})
-Kill-Switch: {'🔴 ACTIVE' if risk_status['kill_switch_active'] else '🟢 OK'}
-
-🔌 **System Health**
-Circuit Breaker: {'🟢 Closed' if not circuit_monitor.is_open('BinanceAPI') else '🔴 Open'}
-"""
-
-            # Send via Telegram
-            self.telegram_bot.send_message_sync(message.strip())
-            logger.info("Daily summary sent")
-
-        except Exception as e:
-            logger.error(f"Daily summary failed: {e}", exc_info=True)
-            # Don't re-raise - let scheduler continue
-
     def schedule_signal_check(self, interval_minutes: int = 10) -> None:
         """Schedule periodic signal checks.
 
@@ -215,11 +125,20 @@ Circuit Breaker: {'🟢 Closed' if not circuit_monitor.is_open('BinanceAPI') els
         - Skip if circuit breaker is open
         - Execute strategy for default symbol
         - Log results
+        - Persist in SQLite (survives scheduler restarts)
         """
+        # Use textual reference for SQLite serialization
+        # Pass parameters as kwargs (will be serialized in SQLite)
         self.scheduler.add_job(
-            func=self._check_signals,
+            func="src.orchestration.jobs:check_trading_signals",
             trigger="interval",
             minutes=interval_minutes,
+            kwargs={
+                "paper_trader": self.paper_trader,
+                "symbol": settings.default_symbol,
+                "timeframe": settings.default_timeframe,
+                "quote_amount": settings.default_quote_amount,
+            },
             id="signal_check",
             replace_existing=True,
             name="Signal Check",
@@ -237,12 +156,19 @@ Circuit Breaker: {'🟢 Closed' if not circuit_monitor.is_open('BinanceAPI') els
         - Daily trading performance
         - Risk status
         - System health
+        - Persist in SQLite (survives scheduler restarts)
         """
+        # Use textual reference for SQLite serialization
+        # Pass parameters as kwargs (will be serialized in SQLite)
         self.scheduler.add_job(
-            func=self._send_daily_summary,
+            func="src.orchestration.jobs:send_daily_performance_summary",
             trigger="cron",
             hour=hour,
             minute=minute,
+            kwargs={
+                "paper_trader": self.paper_trader,
+                "telegram_bot": self.telegram_bot,
+            },
             id="daily_summary",
             replace_existing=True,
             name="Daily Summary",
