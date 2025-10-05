@@ -111,5 +111,6 @@ addopts = [
 ]
 markers = [
     "asyncio: mark test as async (requires pytest-asyncio)",
+    "slow: mark test as slow (>5 seconds runtime)",
 ]
 asyncio_mode = "auto"
