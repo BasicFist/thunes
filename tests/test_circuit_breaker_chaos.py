@@ -13,18 +13,17 @@ Test Categories:
 6. Listener state change notifications
 """
 
-import pytest
 import threading
 import time
-from unittest.mock import patch
+
+import pytest
+from binance.exceptions import BinanceAPIException
 
 from src.utils.circuit_breaker import (
     binance_api_breaker,
     circuit_monitor,
-    CircuitBreakerMonitor,
     with_circuit_breaker,
 )
-from binance.exceptions import BinanceAPIException
 
 
 class TestCircuitBreakerChaos:
@@ -42,13 +41,13 @@ class TestCircuitBreakerChaos:
         def api_call_failure(thread_id: int):
             for i in range(50):
                 try:
+
                     @binance_api_breaker.call
                     def failing_call():
                         raise BinanceAPIException(
-                            response=None,
-                            status_code=503,
-                            text="Service Unavailable"
+                            response=None, status_code=503, text="Service Unavailable"
                         )
+
                     failing_call()
                 except Exception:
                     pass  # Expected
@@ -77,9 +76,11 @@ class TestCircuitBreakerChaos:
         def trigger_failure(thread_id: int):
             for i in range(10):
                 try:
+
                     @binance_api_breaker.call
                     def fail():
                         raise BinanceAPIException(None, 503, "Fail")
+
                     fail()
                 except Exception:
                     with lock:
@@ -110,9 +111,11 @@ class TestCircuitBreakerChaos:
         # Trip to OPEN
         for _ in range(6):
             try:
+
                 @binance_api_breaker.call
                 def fail():
                     raise BinanceAPIException(None, 503, "Fail")
+
                 fail()
             except:
                 pass
@@ -154,9 +157,11 @@ class TestCircuitBreakerChaos:
         # Trip circuit to OPEN
         for _ in range(6):
             try:
+
                 @binance_api_breaker.call
                 def fail():
                     raise BinanceAPIException(None, 503, "Fail")
+
                 fail()
             except:
                 pass
@@ -198,9 +203,11 @@ class TestCircuitBreakerChaos:
 
         for _ in range(6):
             try:
+
                 @binance_api_breaker.call
                 def fail():
                     raise BinanceAPIException(None, 503, "Fail")
+
                 fail()
             except:
                 pass
@@ -238,9 +245,11 @@ class TestCircuitBreakerChaos:
         # Trip to OPEN
         for _ in range(6):
             try:
+
                 @binance_api_breaker.call
                 def fail():
                     raise BinanceAPIException(None, 503, "Fail")
+
                 fail()
             except:
                 pass
@@ -268,9 +277,11 @@ class TestCircuitBreakerChaos:
         # Trip to OPEN
         for _ in range(6):
             try:
+
                 @binance_api_breaker.call
                 def fail():
                     raise BinanceAPIException(None, 503, "Fail")
+
                 fail()
             except:
                 pass
@@ -282,9 +293,11 @@ class TestCircuitBreakerChaos:
 
         # Failed call should re-open circuit
         try:
+
             @binance_api_breaker.call
             def fail_again():
                 raise BinanceAPIException(None, 503, "Fail Again")
+
             fail_again()
         except:
             pass
@@ -299,9 +312,11 @@ class TestCircuitBreakerChaos:
         # Trip circuit
         for _ in range(6):
             try:
+
                 @binance_api_breaker.call
                 def fail():
                     raise BinanceAPIException(None, 503, "Fail")
+
                 fail()
             except:
                 pass
@@ -353,9 +368,11 @@ class TestCircuitBreakerChaos:
         def trigger_state_changes(thread_id: int):
             for i in range(5):
                 try:
+
                     @binance_api_breaker.call
                     def fail():
                         raise BinanceAPIException(None, 503, "Fail")
+
                     fail()
                 except:
                     pass
@@ -392,19 +409,26 @@ class TestCircuitBreakerChaos:
                         @binance_api_breaker.call
                         def success():
                             return "OK"
+
                         result = success()
                         with lock:
-                            results.append((thread_id, i, "success", binance_api_breaker.current_state))
+                            results.append(
+                                (thread_id, i, "success", binance_api_breaker.current_state)
+                            )
                     else:
                         # Failure call
                         try:
+
                             @binance_api_breaker.call
                             def fail():
                                 raise BinanceAPIException(None, 503, "Fail")
+
                             fail()
                         except:
                             with lock:
-                                results.append((thread_id, i, "failure", binance_api_breaker.current_state))
+                                results.append(
+                                    (thread_id, i, "failure", binance_api_breaker.current_state)
+                                )
 
                     time.sleep(0.01)
 
@@ -446,7 +470,7 @@ class TestCircuitBreakerChaos:
             try:
                 for i in range(10):
                     # Alternate success/failure
-                    should_fail = (i % 3 == 0)  # Fail every 3rd call
+                    should_fail = i % 3 == 0  # Fail every 3rd call
 
                     try:
                         result = api_call_with_decorator(should_fail)
@@ -497,9 +521,11 @@ class TestCircuitBreakerConcurrencyStress:
             try:
                 for i in range(100):
                     try:
+
                         @binance_api_breaker.call
                         def fail():
                             raise BinanceAPIException(None, 503, "Rapid Fail")
+
                         fail()
                     except:
                         pass  # Expected
@@ -540,9 +566,10 @@ class TestCircuitBreakerConcurrencyStress:
             try:
                 for i in range(200):
                     # Mix of success (75%) and failure (25%)
-                    should_fail = (i % 4 == 0)
+                    should_fail = i % 4 == 0
 
                     try:
+
                         @binance_api_breaker.call
                         def api_call():
                             if should_fail:
@@ -593,9 +620,11 @@ class TestCircuitBreakerConcurrencyStress:
         def continuous_failures():
             while not stop_flag.is_set():
                 try:
+
                     @binance_api_breaker.call
                     def fail():
                         raise BinanceAPIException(None, 503, "Continuous Fail")
+
                     fail()
                 except:
                     pass

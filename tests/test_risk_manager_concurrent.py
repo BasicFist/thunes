@@ -13,14 +13,15 @@ Test Categories:
 6. Audit trail write thread-safety
 """
 
-import pytest
 import threading
 import time
 from decimal import Decimal
 from pathlib import Path
 
-from src.risk.manager import RiskManager, AUDIT_TRAIL_PATH
+import pytest
+
 from src.models.position import PositionTracker
+from src.risk.manager import AUDIT_TRAIL_PATH, RiskManager
 
 
 class TestRiskManagerConcurrency:
@@ -40,7 +41,7 @@ class TestRiskManagerConcurrency:
                         symbol=f"BTC{thread_id}USDT",  # Different symbols to avoid duplicate check
                         quote_qty=Decimal("10.0"),
                         side="BUY",
-                        strategy_id=f"thread_{thread_id}_trade_{i}"
+                        strategy_id=f"thread_{thread_id}_trade_{i}",
                     )
                     results.append((thread_id, i, is_valid, reason))
                 except Exception as e:
@@ -80,7 +81,7 @@ class TestRiskManagerConcurrency:
                         symbol=symbol,
                         quote_qty=Decimal("10.0"),
                         side="BUY",
-                        strategy_id=f"thread_{thread_id}_pos_{i}"
+                        strategy_id=f"thread_{thread_id}_pos_{i}",
                     )
 
                     if is_valid:
@@ -89,7 +90,7 @@ class TestRiskManagerConcurrency:
                             symbol=symbol,
                             entry_price=Decimal("100.0"),
                             quantity=Decimal("0.1"),
-                            side="LONG"
+                            side="LONG",
                         )
                         accepted.append((thread_id, i, symbol))
                     else:
@@ -118,10 +119,7 @@ class TestRiskManagerConcurrency:
 
     def test_kill_switch_activation_under_concurrent_load(self):
         """Test kill-switch activated correctly when multiple threads trigger losses."""
-        rm = RiskManager(
-            position_tracker=PositionTracker(),
-            max_daily_loss=Decimal("50.0")
-        )
+        rm = RiskManager(position_tracker=PositionTracker(), max_daily_loss=Decimal("50.0"))
 
         kill_switch_activated = []
         errors = []
@@ -159,8 +157,7 @@ class TestRiskManagerConcurrency:
     def test_cool_down_period_thread_safety(self):
         """Test cool-down period correctly enforced across threads."""
         rm = RiskManager(
-            position_tracker=PositionTracker(),
-            cool_down_minutes=1  # 1 minute cool-down
+            position_tracker=PositionTracker(), cool_down_minutes=1  # 1 minute cool-down
         )
 
         # Trigger cool-down
@@ -177,7 +174,7 @@ class TestRiskManagerConcurrency:
                         symbol=f"SYM{thread_id}USDT",
                         quote_qty=Decimal("10.0"),
                         side="BUY",
-                        strategy_id=f"thread_{thread_id}_cooldown_{i}"
+                        strategy_id=f"thread_{thread_id}_cooldown_{i}",
                     )
 
                     if not is_valid and "COOL_DOWN" in reason:
@@ -188,7 +185,9 @@ class TestRiskManagerConcurrency:
             except Exception as e:
                 errors.append((thread_id, str(e)))
 
-        threads = [threading.Thread(target=attempt_trade_during_cooldown, args=(i,)) for i in range(3)]
+        threads = [
+            threading.Thread(target=attempt_trade_during_cooldown, args=(i,)) for i in range(3)
+        ]
 
         for t in threads:
             t.start()
@@ -239,8 +238,9 @@ class TestRiskManagerConcurrency:
         # Verify consistent PnL value (all should return $30.0)
         expected_pnl = Decimal("30.0")
         all_pnl_values = [r[2] for r in pnl_results]
-        assert all(pnl == expected_pnl for pnl in all_pnl_values), \
-            f"Inconsistent PnL values: {set(all_pnl_values)}"
+        assert all(
+            pnl == expected_pnl for pnl in all_pnl_values
+        ), f"Inconsistent PnL values: {set(all_pnl_values)}"
 
     def test_audit_trail_concurrent_writes(self):
         """Test audit trail writes are thread-safe (no corruption)."""
@@ -260,7 +260,7 @@ class TestRiskManagerConcurrency:
                         symbol=f"SYM{thread_id}USDT",
                         quote_qty=Decimal("10.0"),
                         side="BUY",
-                        strategy_id=f"thread_{thread_id}_audit_{i}"
+                        strategy_id=f"thread_{thread_id}_audit_{i}",
                     )
                     time.sleep(0.005)
 
@@ -281,7 +281,7 @@ class TestRiskManagerConcurrency:
         assert Path(AUDIT_TRAIL_PATH).exists()
 
         # Verify all 100 events logged (one per validation)
-        with open(AUDIT_TRAIL_PATH, "r") as f:
+        with open(AUDIT_TRAIL_PATH) as f:
             lines = f.readlines()
 
         # Should have 100 events (some may be missing due to timing, verify ≥90%)
@@ -293,10 +293,7 @@ class TestRiskManagerConcurrency:
 
         # Pre-open a position
         rm.position_tracker.open_position(
-            symbol="BTCUSDT",
-            entry_price=Decimal("43000.0"),
-            quantity=Decimal("0.1"),
-            side="LONG"
+            symbol="BTCUSDT", entry_price=Decimal("43000.0"), quantity=Decimal("0.1"), side="LONG"
         )
 
         duplicate_rejections = []
@@ -309,7 +306,7 @@ class TestRiskManagerConcurrency:
                         symbol="BTCUSDT",  # Same symbol as existing position
                         quote_qty=Decimal("10.0"),
                         side="BUY",
-                        strategy_id=f"thread_{thread_id}_dup_{i}"
+                        strategy_id=f"thread_{thread_id}_dup_{i}",
                     )
 
                     if not is_valid and "already open" in reason:
@@ -336,16 +333,12 @@ class TestRiskManagerConcurrency:
     def test_sell_orders_bypass_limits_concurrently(self):
         """Test SELL orders correctly bypass limits under concurrent load."""
         rm = RiskManager(
-            position_tracker=PositionTracker(),
-            max_positions=1  # Only 1 position allowed
+            position_tracker=PositionTracker(), max_positions=1  # Only 1 position allowed
         )
 
         # Open max positions
         rm.position_tracker.open_position(
-            symbol="BTCUSDT",
-            entry_price=Decimal("43000.0"),
-            quantity=Decimal("0.1"),
-            side="LONG"
+            symbol="BTCUSDT", entry_price=Decimal("43000.0"), quantity=Decimal("0.1"), side="LONG"
         )
 
         sell_approved = []
@@ -360,7 +353,7 @@ class TestRiskManagerConcurrency:
                         symbol="ETHUSDT",
                         quote_qty=Decimal("10.0"),
                         side="SELL",
-                        strategy_id=f"thread_{thread_id}_sell_{i}"
+                        strategy_id=f"thread_{thread_id}_sell_{i}",
                     )
 
                     if is_valid_sell:
@@ -371,7 +364,7 @@ class TestRiskManagerConcurrency:
                         symbol="ETHUSDT",
                         quote_qty=Decimal("10.0"),
                         side="BUY",
-                        strategy_id=f"thread_{thread_id}_buy_{i}"
+                        strategy_id=f"thread_{thread_id}_buy_{i}",
                     )
 
                     if not is_valid_buy:
@@ -489,7 +482,7 @@ class TestRiskManagerConcurrencyStress:
                         symbol=f"SYM{thread_id * 100 + i}USDT",
                         quote_qty=Decimal("10.0"),
                         side="BUY",
-                        strategy_id=f"thread_{thread_id}_burst_{i}"
+                        strategy_id=f"thread_{thread_id}_burst_{i}",
                     )
                     results.append((thread_id, i, is_valid))
 
@@ -531,7 +524,7 @@ class TestRiskManagerConcurrencyStress:
                         symbol=f"SYM{thread_id * 500 + i}USDT",
                         quote_qty=Decimal("10.0"),
                         side="BUY",
-                        strategy_id=f"thread_{thread_id}_sustained_{i}"
+                        strategy_id=f"thread_{thread_id}_sustained_{i}",
                     )
                     results.append((thread_id, i, is_valid))
                     time.sleep(0.02)  # 50 validations/sec per thread

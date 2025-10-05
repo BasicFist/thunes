@@ -13,11 +13,11 @@ Test Categories:
 6. Concurrent read operations
 """
 
-import pytest
 import threading
 import time
 from queue import Queue
-from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.data.ws_stream import BinanceWebSocketStream
 
@@ -34,6 +34,7 @@ class TestWebSocketConcurrency:
 
         # Mock the message handler to track processing
         original_handler = stream._handle_message
+
         def tracked_handler(msg):
             messages_processed.append(msg.get("u"))
             return original_handler(msg)
@@ -43,20 +44,13 @@ class TestWebSocketConcurrency:
 
         def submit_messages(thread_id: int, count: int):
             for i in range(count):
-                msg = {
-                    "u": thread_id * 1000 + i,
-                    "b": "43000.00",
-                    "a": "43000.50"
-                }
+                msg = {"u": thread_id * 1000 + i, "b": "43000.00", "a": "43000.50"}
                 try:
                     stream._message_queue.put(msg, timeout=1.0)
                 except Exception as e:
                     errors.append((thread_id, i, str(e)))
 
-        threads = [
-            threading.Thread(target=submit_messages, args=(i, 1000))
-            for i in range(3)
-        ]
+        threads = [threading.Thread(target=submit_messages, args=(i, 1000)) for i in range(3)]
 
         for t in threads:
             t.start()
@@ -74,8 +68,9 @@ class TestWebSocketConcurrency:
         processed_count = len(messages_processed)
         queue_size = stream._message_queue.qsize()
 
-        assert processed_count + queue_size >= total_submitted * 0.95, \
-            f"Message loss detected: {processed_count} processed + {queue_size} queued < {total_submitted}"
+        assert (
+            processed_count + queue_size >= total_submitted * 0.95
+        ), f"Message loss detected: {processed_count} processed + {queue_size} queued < {total_submitted}"
 
         stream.stop()
 
@@ -250,8 +245,9 @@ class TestWebSocketConcurrency:
 
         # Verify queue not cleared (messages preserved)
         final_queue_size = stream._message_queue.qsize()
-        assert final_queue_size >= initial_queue_size * 0.9, \
-            f"Messages lost during reconnection: {initial_queue_size} → {final_queue_size}"
+        assert (
+            final_queue_size >= initial_queue_size * 0.9
+        ), f"Messages lost during reconnection: {initial_queue_size} → {final_queue_size}"
 
         stream.stop()
 
@@ -384,7 +380,7 @@ class TestWebSocketConcurrencyStress:
                 msg = {
                     "u": thread_id * 2000 + i,
                     "b": f"{43000 + (i % 100)}.00",
-                    "a": f"{43000 + (i % 100) + 1}.00"
+                    "a": f"{43000 + (i % 100) + 1}.00",
                 }
                 try:
                     stream._message_queue.put(msg, timeout=0.1)
