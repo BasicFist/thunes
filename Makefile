@@ -27,8 +27,8 @@ install:  ## Alias for install-all (backward compatibility)
 	@echo "💡 Tip: Use 'make install-core' for production, 'make install-dev' for development"
 	$(MAKE) install-all
 
-test:  ## Run tests
-	pytest -v --cov=src --cov-report=term-missing
+test:  ## Run tests (parallel execution via pytest-xdist)
+	pytest
 
 lint:  ## Run linters (ruff + mypy)
 	ruff check src tests

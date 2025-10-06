@@ -108,9 +108,13 @@ addopts = [
     "--cov=src",
     "--cov-report=term-missing",
     "--cov-report=html",
+    "-n=auto",  # Parallel test execution (pytest-xdist)
 ]
 markers = [
     "asyncio: mark test as async (requires pytest-asyncio)",
     "slow: mark test as slow (>5 seconds runtime)",
 ]
 asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::ResourceWarning",  # Suppress unclosed database warnings (tests use temp files)
+]
