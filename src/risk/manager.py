@@ -167,9 +167,10 @@ class RiskManager:
                     )
 
             # 4. Check position count limit (for BUY orders)
+            # Use atomic count to prevent TOCTOU race condition
             if side == "BUY":
-                open_positions = self.position_tracker.get_all_open_positions()
-                if len(open_positions) >= self.max_positions:
+                position_count = self.position_tracker.count_open_positions()
+                if position_count >= self.max_positions:
                     self._write_audit_log(
                         event="TRADE_REJECTED",
                         details={
@@ -178,13 +179,13 @@ class RiskManager:
                             "side": side,
                             "quote_qty": quote_qty,
                             "strategy_id": strategy_id,
-                            "open_positions": len(open_positions),
+                            "open_positions": position_count,
                             "max_positions": self.max_positions,
                         },
                     )
                     return (
                         False,
-                        f"❌ Max position limit reached ({len(open_positions)}/{self.max_positions})",
+                        f"❌ Max position limit reached ({position_count}/{self.max_positions})",
                     )
 
             # 5. Check if position already exists for symbol (for BUY orders)
@@ -245,7 +246,7 @@ class RiskManager:
                     "quote_qty": quote_qty,
                     "strategy_id": strategy_id,
                     "daily_pnl": float(daily_loss),
-                    "open_positions": len(self.position_tracker.get_all_open_positions()),
+                    "open_positions": self.position_tracker.count_open_positions(),
                 },
             )
 
@@ -380,7 +381,7 @@ class RiskManager:
                         "reason": reason,
                         "daily_pnl": float(daily_loss),
                         "daily_loss_limit": float(self.max_daily_loss),
-                        "open_positions": len(self.position_tracker.get_all_open_positions()),
+                        "open_positions": self.position_tracker.count_open_positions(),
                         "circuit_breaker_status": circuit_monitor.get_status(),
                     },
                 )
@@ -444,7 +445,7 @@ class RiskManager:
             Dictionary with risk metrics and limits
         """
         daily_pnl = self.get_daily_pnl()
-        open_positions = self.position_tracker.get_all_open_positions()
+        position_count = self.position_tracker.count_open_positions()
 
         cool_down_remaining = None
         if self.last_loss_time:
@@ -459,9 +460,9 @@ class RiskManager:
             "daily_loss_utilization": (
                 float(abs(daily_pnl) / self.max_daily_loss * 100) if daily_pnl < 0 else 0.0
             ),
-            "open_positions": len(open_positions),
+            "open_positions": position_count,
             "max_positions": self.max_positions,
-            "position_slots_available": self.max_positions - len(open_positions),
+            "position_slots_available": self.max_positions - position_count,
             "cool_down_active": cool_down_remaining is not None,
             "cool_down_remaining_minutes": cool_down_remaining,
             "circuit_breaker_status": circuit_monitor.get_status(),

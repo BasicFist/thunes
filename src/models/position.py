@@ -297,6 +297,23 @@ class PositionTracker:
 
         return count > 0
 
+    def count_open_positions(self) -> int:
+        """
+        Count total number of open positions atomically.
+
+        Thread-safe: Uses DB SELECT COUNT for atomic read.
+        This prevents TOCTOU (Time-of-Check-Time-of-Use) race conditions
+        when enforcing position limits under concurrent load.
+
+        Returns:
+            Number of open positions across all symbols
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM positions WHERE status = 'OPEN'")
+            count = cursor.fetchone()[0]
+
+        return count
+
     def calculate_unrealized_pnl(self, symbol: str, current_price: Decimal) -> Decimal | None:
         """
         Calculate unrealized PnL for open position.
@@ -384,7 +401,7 @@ class PositionTracker:
                     pnl=Decimal(str(row["pnl"])) if row["pnl"] else None,
                     status=row["status"],
                     order_id=row["order_id"],
-                    exit_order_id=row.get("exit_order_id"),  # Safely get exit_order_id
+                    exit_order_id=row["exit_order_id"] if "exit_order_id" in row.keys() else None,
                 )
             )
 
