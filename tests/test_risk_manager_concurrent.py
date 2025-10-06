@@ -13,6 +13,7 @@ Test Categories:
 6. Audit trail write thread-safety
 """
 
+import tempfile
 import threading
 import time
 from decimal import Decimal
@@ -24,12 +25,31 @@ from src.models.position import PositionTracker
 from src.risk.manager import AUDIT_TRAIL_PATH, RiskManager
 
 
+@pytest.fixture
+def temp_db_path():
+    """Create a temporary database file path for test isolation.
+
+    Uses a real file (not :memory:) to allow multi-threaded access.
+    The file is automatically cleaned up after the test.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    yield db_path
+
+    # Cleanup after test
+    try:
+        Path(db_path).unlink()
+    except FileNotFoundError:
+        pass
+
+
 class TestRiskManagerConcurrency:
     """Concurrent risk validation tests."""
 
-    def test_concurrent_validate_trade(self):
+    def test_concurrent_validate_trade(self, temp_db_path):
         """Test 5 threads × 20 trades/thread validated concurrently."""
-        rm = RiskManager(position_tracker=PositionTracker())
+        rm = RiskManager(position_tracker=PositionTracker(db_path=temp_db_path))
 
         results = []
         errors = []
@@ -65,10 +85,10 @@ class TestRiskManagerConcurrency:
         valid_trades = [r for r in results if r[2]]
         assert len(valid_trades) == 100
 
-    def test_concurrent_position_limit_enforcement(self):
+    def test_concurrent_position_limit_enforcement(self, temp_db_path):
         """Test MAX_POSITIONS enforced correctly under concurrent load."""
         rm = RiskManager(
-            position_tracker=PositionTracker(),
+            position_tracker=PositionTracker(db_path=temp_db_path),
             max_positions=3,
             max_loss_per_trade=Decimal("20.0"),  # Allow $10 trades
         )
@@ -121,10 +141,10 @@ class TestRiskManagerConcurrency:
         max_pos_rejections = [r for r in rejected if "MAX_POSITIONS" in r[3]]
         assert len(max_pos_rejections) >= 20  # Allow for timing variations
 
-    def test_kill_switch_activation_under_concurrent_load(self):
+    def test_kill_switch_activation_under_concurrent_load(self, temp_db_path):
         """Test kill-switch activated correctly when multiple threads trigger losses."""
         rm = RiskManager(
-            position_tracker=PositionTracker(),
+            position_tracker=PositionTracker(db_path=temp_db_path),
             max_daily_loss=Decimal("50.0"),
             max_loss_per_trade=Decimal("20.0"),  # Allow $12 losses
         )
@@ -162,10 +182,10 @@ class TestRiskManagerConcurrency:
         # Verify at least one thread detected activation
         assert len(kill_switch_activated) > 0
 
-    def test_cool_down_period_thread_safety(self):
+    def test_cool_down_period_thread_safety(self, temp_db_path):
         """Test cool-down period correctly enforced across threads."""
         rm = RiskManager(
-            position_tracker=PositionTracker(),
+            position_tracker=PositionTracker(db_path=temp_db_path),
             cool_down_minutes=1,  # 1 minute cool-down
             max_loss_per_trade=Decimal("20.0"),  # Allow $10 trades
         )
@@ -210,10 +230,11 @@ class TestRiskManagerConcurrency:
         # Verify all trades blocked (30 total)
         assert len(blocked_trades) == 30
 
-    def test_daily_pnl_calculation_concurrency(self):
+    def test_daily_pnl_calculation_concurrency(self, temp_db_path):
         """Test get_daily_pnl() thread-safe when called concurrently."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+            position_tracker=PositionTracker(db_path=temp_db_path),
+            max_loss_per_trade=Decimal("20.0"),
         )
 
         # Record some PnL
@@ -254,10 +275,11 @@ class TestRiskManagerConcurrency:
             pnl == expected_pnl for pnl in all_pnl_values
         ), f"Inconsistent PnL values: {set(all_pnl_values)}"
 
-    def test_audit_trail_concurrent_writes(self):
+    def test_audit_trail_concurrent_writes(self, temp_db_path):
         """Test audit trail writes are thread-safe (no corruption)."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+            position_tracker=PositionTracker(db_path=temp_db_path),
+            max_loss_per_trade=Decimal("20.0"),
         )
 
         # Clear audit trail
@@ -301,10 +323,11 @@ class TestRiskManagerConcurrency:
         # Should have 100 events (some may be missing due to timing, verify ≥90%)
         assert len(lines) >= 90, f"Expected ≥90 audit events, got {len(lines)}"
 
-    def test_concurrent_duplicate_position_detection(self):
+    def test_concurrent_duplicate_position_detection(self, temp_db_path):
         """Test duplicate position check works correctly under concurrency."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+            position_tracker=PositionTracker(db_path=temp_db_path),
+            max_loss_per_trade=Decimal("20.0"),
         )
 
         # Pre-open a position
@@ -349,10 +372,10 @@ class TestRiskManagerConcurrency:
         # Verify all duplicate attempts rejected (30 total)
         assert len(duplicate_rejections) == 30
 
-    def test_sell_orders_bypass_limits_concurrently(self):
+    def test_sell_orders_bypass_limits_concurrently(self, temp_db_path):
         """Test SELL orders correctly bypass limits under concurrent load."""
         rm = RiskManager(
-            position_tracker=PositionTracker(),
+            position_tracker=PositionTracker(db_path=temp_db_path),
             max_positions=1,  # Only 1 position allowed
             max_loss_per_trade=Decimal("20.0"),  # Allow $10 trades
         )
@@ -415,10 +438,11 @@ class TestRiskManagerConcurrency:
         # Verify all BUY orders rejected (30 total)
         assert len(buy_rejected) == 30
 
-    def test_reset_daily_state_concurrency(self):
+    def test_reset_daily_state_concurrency(self, temp_db_path):
         """Test reset_daily_state() thread-safe when called concurrently."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+            position_tracker=PositionTracker(db_path=temp_db_path),
+            max_loss_per_trade=Decimal("20.0"),
         )
 
         # Prime with data
@@ -451,10 +475,11 @@ class TestRiskManagerConcurrency:
         assert rm.get_daily_pnl() == Decimal("0.0")
         assert not rm.in_cool_down()
 
-    def test_get_risk_status_concurrent_reads(self):
+    def test_get_risk_status_concurrent_reads(self, temp_db_path):
         """Test get_risk_status() thread-safe for concurrent reads."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+            position_tracker=PositionTracker(db_path=temp_db_path),
+            max_loss_per_trade=Decimal("20.0"),
         )
 
         # Prime with data
@@ -496,10 +521,11 @@ class TestRiskManagerConcurrency:
 class TestRiskManagerConcurrencyStress:
     """Stress tests for Risk Manager concurrency (high load scenarios)."""
 
-    def test_high_volume_validation_burst(self):
+    def test_high_volume_validation_burst(self, temp_db_path):
         """Test 1000 validations from 10 threads in rapid succession."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+            position_tracker=PositionTracker(db_path=temp_db_path),
+            max_loss_per_trade=Decimal("20.0"),
         )
 
         results = []
@@ -540,10 +566,11 @@ class TestRiskManagerConcurrencyStress:
         assert elapsed < 5.0, f"Validation burst took {elapsed}s (expected <5s)"
 
     @pytest.mark.slow
-    def test_sustained_concurrent_validation(self):
+    def test_sustained_concurrent_validation(self, temp_db_path):
         """Test 5 threads × 500 validations over 10 seconds."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+            position_tracker=PositionTracker(db_path=temp_db_path),
+            max_loss_per_trade=Decimal("20.0"),
         )
 
         results = []
