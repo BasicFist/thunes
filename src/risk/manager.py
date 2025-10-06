@@ -14,6 +14,7 @@ import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from src.config import settings
@@ -35,6 +36,10 @@ class RiskManager:
         position_tracker: PositionTracker | None = None,
         enable_telegram: bool = True,
         telegram_bot: Any | None = None,
+        max_loss_per_trade: Decimal | float | None = None,
+        max_daily_loss: Decimal | float | None = None,
+        max_positions: int | None = None,
+        cool_down_minutes: int | None = None,
     ) -> None:
         """
         Initialize risk manager.
@@ -43,25 +48,43 @@ class RiskManager:
             position_tracker: PositionTracker instance (creates new if None)
             enable_telegram: Enable Telegram kill-switch alerts
             telegram_bot: Pre-initialized TelegramBot instance (creates new if None and enabled)
+            max_loss_per_trade: Override max loss per trade (defaults to settings)
+            max_daily_loss: Override max daily loss (defaults to settings)
+            max_positions: Override max concurrent positions (defaults to settings)
+            cool_down_minutes: Override cool-down period in minutes (defaults to settings)
         """
         self.position_tracker = position_tracker or PositionTracker()
         self.enable_telegram = enable_telegram
         self.telegram_bot = telegram_bot
 
-        # Risk limits from config
-        self.max_loss_per_trade = Decimal(str(settings.max_loss_per_trade))
-        self.max_daily_loss = Decimal(str(settings.max_daily_loss))
-        self.max_positions = settings.max_positions
-        self.cool_down_minutes = settings.cool_down_minutes
+        # Risk limits: Use provided overrides, fall back to config settings
+        self.max_loss_per_trade = (
+            Decimal(str(max_loss_per_trade))
+            if max_loss_per_trade is not None
+            else Decimal(str(settings.max_loss_per_trade))
+        )
+        self.max_daily_loss = (
+            Decimal(str(max_daily_loss))
+            if max_daily_loss is not None
+            else Decimal(str(settings.max_daily_loss))
+        )
+        self.max_positions = max_positions if max_positions is not None else settings.max_positions
+        self.cool_down_minutes = (
+            cool_down_minutes if cool_down_minutes is not None else settings.cool_down_minutes
+        )
 
         # State tracking
         self.kill_switch_active = False
         self.last_loss_time: datetime | None = None
         self._daily_loss_cache: tuple[datetime, Decimal] | None = None
 
+        # Thread-safety: Reentrant lock for concurrent validate_trade() calls
+        self._lock = RLock()
+
         logger.info(
             f"RiskManager initialized: max_loss_per_trade={self.max_loss_per_trade}, "
             f"max_daily_loss={self.max_daily_loss}, max_positions={self.max_positions}, "
+            f"cool_down_minutes={self.cool_down_minutes}, "
             f"telegram_enabled={self.enable_telegram}"
         )
 
@@ -75,6 +98,9 @@ class RiskManager:
         """
         Validate if trade is allowed under risk management rules.
 
+        Thread-safe: All validation logic runs under RLock to prevent race conditions
+        in concurrent validate_trade() calls from multiple scheduler threads.
+
         Args:
             symbol: Trading pair symbol
             quote_qty: Amount in quote currency (e.g., USDT)
@@ -84,175 +110,179 @@ class RiskManager:
         Returns:
             Tuple of (is_valid, reason_message)
         """
-        # 1. Check kill-switch (allow SELLs to exit positions, block only BUYs)
-        if self.kill_switch_active and side == "BUY":
-            self._write_audit_log(
-                event="TRADE_REJECTED",
-                details={
-                    "reason": "kill_switch_active",
-                    "symbol": symbol,
-                    "side": side,
-                    "quote_qty": quote_qty,
-                    "strategy_id": strategy_id,
-                },
-            )
-            return False, "🛑 KILL-SWITCH ACTIVE: New positions blocked (exits allowed)"
+        with self._lock:
+            # 1. Check kill-switch (allow SELLs to exit positions, block only BUYs)
+            if self.kill_switch_active and side == "BUY":
+                self._write_audit_log(
+                    event="TRADE_REJECTED",
+                    details={
+                        "reason": "kill_switch_active",
+                        "symbol": symbol,
+                        "side": side,
+                        "quote_qty": quote_qty,
+                        "strategy_id": strategy_id,
+                    },
+                )
+                return False, "🛑 KILL-SWITCH ACTIVE: New positions blocked (exits allowed)"
 
-        # 2. Check daily loss limit
-        daily_loss = self.get_daily_pnl()
-        if daily_loss <= -self.max_daily_loss:
-            self.activate_kill_switch(reason=f"Daily loss {daily_loss:.2f} exceeds limit")
+            # 2. Check daily loss limit
+            daily_loss = self.get_daily_pnl()
+            if daily_loss <= -self.max_daily_loss:
+                self.activate_kill_switch(reason=f"Daily loss {daily_loss:.2f} exceeds limit")
+                self._write_audit_log(
+                    event="TRADE_REJECTED",
+                    details={
+                        "reason": "daily_loss_limit_exceeded",
+                        "symbol": symbol,
+                        "side": side,
+                        "quote_qty": quote_qty,
+                        "strategy_id": strategy_id,
+                        "daily_pnl": float(daily_loss),
+                        "daily_loss_limit": float(self.max_daily_loss),
+                    },
+                )
+                return (
+                    False,
+                    f"🛑 KILL-SWITCH: Daily loss {daily_loss:.2f} exceeds limit {-self.max_daily_loss:.2f}",
+                )
+
+            # 3. Check per-trade loss limit (for BUY orders)
+            if side == "BUY":
+                quote_decimal = Decimal(str(quote_qty))
+                if quote_decimal > self.max_loss_per_trade:
+                    self._write_audit_log(
+                        event="TRADE_REJECTED",
+                        details={
+                            "reason": "per_trade_loss_limit_exceeded",
+                            "symbol": symbol,
+                            "side": side,
+                            "quote_qty": quote_qty,
+                            "strategy_id": strategy_id,
+                            "max_loss_per_trade": float(self.max_loss_per_trade),
+                        },
+                    )
+                    return (
+                        False,
+                        f"❌ Trade size {quote_qty:.2f} exceeds max loss per trade {self.max_loss_per_trade}",
+                    )
+
+            # 4. Check position count limit (for BUY orders)
+            if side == "BUY":
+                open_positions = self.position_tracker.get_all_open_positions()
+                if len(open_positions) >= self.max_positions:
+                    self._write_audit_log(
+                        event="TRADE_REJECTED",
+                        details={
+                            "reason": "max_position_limit_reached",
+                            "symbol": symbol,
+                            "side": side,
+                            "quote_qty": quote_qty,
+                            "strategy_id": strategy_id,
+                            "open_positions": len(open_positions),
+                            "max_positions": self.max_positions,
+                        },
+                    )
+                    return (
+                        False,
+                        f"❌ Max position limit reached ({len(open_positions)}/{self.max_positions})",
+                    )
+
+            # 5. Check if position already exists for symbol (for BUY orders)
+            if side == "BUY":
+                if self.position_tracker.has_open_position(symbol):
+                    self._write_audit_log(
+                        event="TRADE_REJECTED",
+                        details={
+                            "reason": "duplicate_position",
+                            "symbol": symbol,
+                            "side": side,
+                            "quote_qty": quote_qty,
+                            "strategy_id": strategy_id,
+                        },
+                    )
+                    return False, f"❌ Position already exists for {symbol}"
+
+            # 6. Check cool-down period after loss
+            if self.last_loss_time and side == "BUY":
+                cool_down_end = self.last_loss_time + timedelta(minutes=self.cool_down_minutes)
+                if datetime.utcnow() < cool_down_end:
+                    remaining = (cool_down_end - datetime.utcnow()).total_seconds() / 60
+                    self._write_audit_log(
+                        event="TRADE_REJECTED",
+                        details={
+                            "reason": "cool_down_active",
+                            "symbol": symbol,
+                            "side": side,
+                            "quote_qty": quote_qty,
+                            "strategy_id": strategy_id,
+                            "cool_down_remaining_minutes": round(remaining, 1),
+                        },
+                    )
+                    return False, f"⏳ Cool-down active: {remaining:.1f} min remaining after loss"
+
+            # 7. Check circuit breaker status
+            if circuit_monitor.is_any_open():
+                status = circuit_monitor.get_status()
+                self._write_audit_log(
+                    event="TRADE_REJECTED",
+                    details={
+                        "reason": "circuit_breaker_open",
+                        "symbol": symbol,
+                        "side": side,
+                        "quote_qty": quote_qty,
+                        "strategy_id": strategy_id,
+                        "circuit_breaker_status": status,
+                    },
+                )
+                return False, f"⚡ Circuit breaker open: {status}"
+
+            # All checks passed - log approval
             self._write_audit_log(
-                event="TRADE_REJECTED",
+                event="TRADE_APPROVED",
                 details={
-                    "reason": "daily_loss_limit_exceeded",
                     "symbol": symbol,
                     "side": side,
                     "quote_qty": quote_qty,
                     "strategy_id": strategy_id,
                     "daily_pnl": float(daily_loss),
-                    "daily_loss_limit": float(self.max_daily_loss),
+                    "open_positions": len(self.position_tracker.get_all_open_positions()),
                 },
             )
-            return (
-                False,
-                f"🛑 KILL-SWITCH: Daily loss {daily_loss:.2f} exceeds limit {-self.max_daily_loss:.2f}",
-            )
 
-        # 3. Check per-trade loss limit (for BUY orders)
-        if side == "BUY":
-            quote_decimal = Decimal(str(quote_qty))
-            if quote_decimal > self.max_loss_per_trade:
-                self._write_audit_log(
-                    event="TRADE_REJECTED",
-                    details={
-                        "reason": "per_trade_loss_limit_exceeded",
-                        "symbol": symbol,
-                        "side": side,
-                        "quote_qty": quote_qty,
-                        "strategy_id": strategy_id,
-                        "max_loss_per_trade": float(self.max_loss_per_trade),
-                    },
-                )
-                return (
-                    False,
-                    f"❌ Trade size {quote_qty:.2f} exceeds max loss per trade {self.max_loss_per_trade}",
-                )
-
-        # 4. Check position count limit (for BUY orders)
-        if side == "BUY":
-            open_positions = self.position_tracker.get_all_open_positions()
-            if len(open_positions) >= self.max_positions:
-                self._write_audit_log(
-                    event="TRADE_REJECTED",
-                    details={
-                        "reason": "max_position_limit_reached",
-                        "symbol": symbol,
-                        "side": side,
-                        "quote_qty": quote_qty,
-                        "strategy_id": strategy_id,
-                        "open_positions": len(open_positions),
-                        "max_positions": self.max_positions,
-                    },
-                )
-                return (
-                    False,
-                    f"❌ Max position limit reached ({len(open_positions)}/{self.max_positions})",
-                )
-
-        # 5. Check if position already exists for symbol (for BUY orders)
-        if side == "BUY":
-            if self.position_tracker.has_open_position(symbol):
-                self._write_audit_log(
-                    event="TRADE_REJECTED",
-                    details={
-                        "reason": "duplicate_position",
-                        "symbol": symbol,
-                        "side": side,
-                        "quote_qty": quote_qty,
-                        "strategy_id": strategy_id,
-                    },
-                )
-                return False, f"❌ Position already exists for {symbol}"
-
-        # 6. Check cool-down period after loss
-        if self.last_loss_time and side == "BUY":
-            cool_down_end = self.last_loss_time + timedelta(minutes=self.cool_down_minutes)
-            if datetime.utcnow() < cool_down_end:
-                remaining = (cool_down_end - datetime.utcnow()).total_seconds() / 60
-                self._write_audit_log(
-                    event="TRADE_REJECTED",
-                    details={
-                        "reason": "cool_down_active",
-                        "symbol": symbol,
-                        "side": side,
-                        "quote_qty": quote_qty,
-                        "strategy_id": strategy_id,
-                        "cool_down_remaining_minutes": round(remaining, 1),
-                    },
-                )
-                return False, f"⏳ Cool-down active: {remaining:.1f} min remaining after loss"
-
-        # 7. Check circuit breaker status
-        if circuit_monitor.is_any_open():
-            status = circuit_monitor.get_status()
-            self._write_audit_log(
-                event="TRADE_REJECTED",
-                details={
-                    "reason": "circuit_breaker_open",
-                    "symbol": symbol,
-                    "side": side,
-                    "quote_qty": quote_qty,
-                    "strategy_id": strategy_id,
-                    "circuit_breaker_status": status,
-                },
-            )
-            return False, f"⚡ Circuit breaker open: {status}"
-
-        # All checks passed - log approval
-        self._write_audit_log(
-            event="TRADE_APPROVED",
-            details={
-                "symbol": symbol,
-                "side": side,
-                "quote_qty": quote_qty,
-                "strategy_id": strategy_id,
-                "daily_pnl": float(daily_loss),
-                "open_positions": len(self.position_tracker.get_all_open_positions()),
-            },
-        )
-
-        return True, "✅ Trade validation passed"
+            return True, "✅ Trade validation passed"
 
     def get_daily_pnl(self) -> Decimal:
         """
         Calculate total PnL for the current day.
 
+        Thread-safe: Uses RLock to protect cache read/write.
+
         Returns:
             Total PnL in quote currency (negative for losses)
         """
-        # Check cache (valid for 1 minute to avoid excessive DB queries)
-        now = datetime.utcnow()
-        if self._daily_loss_cache:
-            cache_time, cache_value = self._daily_loss_cache
-            if (now - cache_time).total_seconds() < 60:
-                return cache_value
+        with self._lock:
+            # Check cache (valid for 1 minute to avoid excessive DB queries)
+            now = datetime.utcnow()
+            if self._daily_loss_cache:
+                cache_time, cache_value = self._daily_loss_cache
+                if (now - cache_time).total_seconds() < 60:
+                    return cache_value
 
-        # Calculate PnL from positions closed today
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        all_positions = self.position_tracker.get_position_history(limit=1000)
+            # Calculate PnL from positions closed today
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            all_positions = self.position_tracker.get_position_history(limit=1000)
 
-        daily_pnl = Decimal("0.0")
-        for position in all_positions:
-            if position.exit_time and position.exit_time >= today_start:
-                if position.pnl:
-                    daily_pnl += position.pnl
+            daily_pnl = Decimal("0.0")
+            for position in all_positions:
+                if position.exit_time and position.exit_time >= today_start:
+                    if position.pnl:
+                        daily_pnl += position.pnl
 
-        # Cache the result
-        self._daily_loss_cache = (now, daily_pnl)
+            # Cache the result
+            self._daily_loss_cache = (now, daily_pnl)
 
-        logger.debug(f"Daily PnL: {daily_pnl:.2f} (from {len(all_positions)} positions)")
-        return daily_pnl
+            logger.debug(f"Daily PnL: {daily_pnl:.2f} (from {len(all_positions)} positions)")
+            return daily_pnl
 
     def _write_audit_log(self, event: str, details: dict) -> None:
         """
@@ -262,10 +292,24 @@ class RiskManager:
             event: Event type (e.g., "KILL_SWITCH_ACTIVATED", "TRADE_REJECTED")
             details: Event-specific details dictionary
         """
+        # Convert Decimal objects to float for JSON serialization
+        serializable_details = {}
+        for key, value in details.items():
+            if isinstance(value, Decimal):
+                serializable_details[key] = float(value)
+            elif isinstance(value, dict):
+                # Recursively handle nested dicts (e.g., circuit_breaker_status)
+                nested_dict: dict[str, Any] = {}
+                for k, v in value.items():
+                    nested_dict[k] = float(v) if isinstance(v, Decimal) else v
+                serializable_details[key] = nested_dict
+            else:
+                serializable_details[key] = value
+
         audit_entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "event": event,
-            **details,
+            **serializable_details,
         }
 
         # Ensure logs directory exists
@@ -283,6 +327,8 @@ class RiskManager:
         """
         Activate kill-switch to halt all trading.
 
+        Thread-safe: Uses RLock to protect kill_switch_active state.
+
         Triggers:
         - Critical logging
         - Telegram alert
@@ -291,92 +337,104 @@ class RiskManager:
         Args:
             reason: Reason for activation (for audit trail)
         """
-        if not self.kill_switch_active:
-            self.kill_switch_active = True
-            daily_loss = self.get_daily_pnl()
-            logger.critical(
-                f"🛑🛑🛑 KILL-SWITCH ACTIVATED 🛑🛑🛑\n"
-                f"Daily loss: {daily_loss:.2f} / Limit: {-self.max_daily_loss:.2f}\n"
-                f"All trading halted. Manual intervention required."
-            )
+        with self._lock:
+            if not self.kill_switch_active:
+                self.kill_switch_active = True
+                daily_loss = self.get_daily_pnl()
+                logger.critical(
+                    f"🛑🛑🛑 KILL-SWITCH ACTIVATED 🛑🛑🛑\n"
+                    f"Daily loss: {daily_loss:.2f} / Limit: {-self.max_daily_loss:.2f}\n"
+                    f"All trading halted. Manual intervention required."
+                )
 
-            # Telegram alert (only if enabled)
-            if self.enable_telegram:
-                try:
-                    # Use existing bot instance or create new one
-                    if self.telegram_bot is None:
-                        from src.alerts.telegram import TelegramBot
+                # Telegram alert (only if enabled)
+                if self.enable_telegram:
+                    try:
+                        # Use existing bot instance or create new one
+                        if self.telegram_bot is None:
+                            from src.alerts.telegram import TelegramBot
 
-                        self.telegram_bot = TelegramBot()
+                            self.telegram_bot = TelegramBot()
 
-                    # Only send if bot is properly configured
-                    if self.telegram_bot and self.telegram_bot.enabled:
-                        # Format kill-switch message manually
-                        message = (
-                            f"🛑 *KILL-SWITCH ACTIVATED* 🛑\n\n"
-                            f"Daily Loss: `{daily_loss:.2f}` USDT\n"
-                            f"Limit: `{-self.max_daily_loss:.2f}` USDT\n"
-                            f"Utilization: `{abs(daily_loss / self.max_daily_loss * 100):.1f}%`\n\n"
-                            f"⚠️ *All trading halted. Manual intervention required.*\n"
-                            f"Reason: {reason}"
-                        )
-                        self.telegram_bot.send_message_sync(message)
-                    else:
-                        logger.info("Telegram bot not configured - skipping kill-switch alert")
-                except Exception as e:
-                    logger.error(f"Failed to send Telegram kill-switch alert: {e}")
+                        # Only send if bot is properly configured
+                        if self.telegram_bot and self.telegram_bot.enabled:
+                            # Format kill-switch message manually
+                            message = (
+                                f"🛑 *KILL-SWITCH ACTIVATED* 🛑\n\n"
+                                f"Daily Loss: `{daily_loss:.2f}` USDT\n"
+                                f"Limit: `{-self.max_daily_loss:.2f}` USDT\n"
+                                f"Utilization: `{abs(daily_loss / self.max_daily_loss * 100):.1f}%`\n\n"
+                                f"⚠️ *All trading halted. Manual intervention required.*\n"
+                                f"Reason: {reason}"
+                            )
+                            self.telegram_bot.send_message_sync(message)
+                        else:
+                            logger.info("Telegram bot not configured - skipping kill-switch alert")
+                    except Exception as e:
+                        logger.error(f"Failed to send Telegram kill-switch alert: {e}")
 
-            # Immutable audit trail
-            self._write_audit_log(
-                event="KILL_SWITCH_ACTIVATED",
-                details={
-                    "reason": reason,
-                    "daily_pnl": float(daily_loss),
-                    "daily_loss_limit": float(self.max_daily_loss),
-                    "open_positions": len(self.position_tracker.get_all_open_positions()),
-                    "circuit_breaker_status": circuit_monitor.get_status(),
-                },
-            )
+                # Immutable audit trail
+                self._write_audit_log(
+                    event="KILL_SWITCH_ACTIVATED",
+                    details={
+                        "reason": reason,
+                        "daily_pnl": float(daily_loss),
+                        "daily_loss_limit": float(self.max_daily_loss),
+                        "open_positions": len(self.position_tracker.get_all_open_positions()),
+                        "circuit_breaker_status": circuit_monitor.get_status(),
+                    },
+                )
 
     def deactivate_kill_switch(self, reason: str = "Manual reset") -> None:
         """
         Deactivate kill-switch (requires manual action).
 
+        Thread-safe: Uses RLock to protect kill_switch_active state.
+
         Args:
             reason: Reason for deactivation (for audit trail)
         """
-        if self.kill_switch_active:
-            self.kill_switch_active = False
-            logger.warning(f"Kill-switch deactivated: {reason}")
+        with self._lock:
+            if self.kill_switch_active:
+                self.kill_switch_active = False
+                logger.warning(f"Kill-switch deactivated: {reason}")
 
-            # Audit trail entry
-            self._write_audit_log(
-                event="KILL_SWITCH_DEACTIVATED",
-                details={
-                    "reason": reason,
-                    "daily_pnl": float(self.get_daily_pnl()),
-                },
-            )
-        else:
-            logger.info("Kill-switch was not active")
+                # Audit trail entry
+                self._write_audit_log(
+                    event="KILL_SWITCH_DEACTIVATED",
+                    details={
+                        "reason": reason,
+                        "daily_pnl": float(self.get_daily_pnl()),
+                    },
+                )
+            else:
+                logger.info("Kill-switch was not active")
 
     def record_loss(self) -> None:
         """
         Record a losing trade to trigger cool-down period.
 
+        Thread-safe: Uses RLock to protect last_loss_time state.
+
         Should be called after closing a position with negative PnL.
         """
-        self.last_loss_time = datetime.utcnow()
-        logger.info(f"Loss recorded. Cool-down period active for {self.cool_down_minutes} minutes.")
+        with self._lock:
+            self.last_loss_time = datetime.utcnow()
+            logger.info(
+                f"Loss recorded. Cool-down period active for {self.cool_down_minutes} minutes."
+            )
 
     def record_win(self) -> None:
         """
         Record a winning trade (clears cool-down).
 
+        Thread-safe: Uses RLock to protect last_loss_time state.
+
         Should be called after closing a position with positive PnL.
         """
-        self.last_loss_time = None
-        logger.info("Win recorded. Cool-down period cleared.")
+        with self._lock:
+            self.last_loss_time = None
+            logger.info("Win recorded. Cool-down period cleared.")
 
     def get_risk_status(self) -> dict:
         """

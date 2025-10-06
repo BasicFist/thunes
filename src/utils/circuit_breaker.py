@@ -2,6 +2,7 @@
 
 import functools
 from collections.abc import Callable
+from threading import RLock
 from typing import TypeVar
 
 import pybreaker
@@ -182,8 +183,13 @@ class CircuitBreakerMonitor:
         self.breakers = breakers
         self._breakers_by_name = {b.name: b for b in breakers}
 
+        # Thread-safety: Reentrant lock for concurrent access to breakers dict
+        self._lock = RLock()
+
     def is_open(self, breaker_name: str) -> bool:
         """Check if a specific circuit breaker is open.
+
+        Thread-safe: Uses RLock to protect breakers dict access.
 
         Args:
             breaker_name: Name of the circuit breaker
@@ -194,40 +200,47 @@ class CircuitBreakerMonitor:
         Raises:
             KeyError: If breaker_name not found
         """
-        breaker = self._breakers_by_name.get(breaker_name)
-        if breaker is None:
-            return False  # Breaker doesn't exist - assume closed
+        with self._lock:
+            breaker = self._breakers_by_name.get(breaker_name)
+            if breaker is None:
+                return False  # Breaker doesn't exist - assume closed
 
-        # Direct enum comparison (same pattern as is_any_open)
-        return bool(breaker.current_state == pybreaker.STATE_OPEN)
+            # Direct enum comparison (same pattern as is_any_open)
+            return bool(breaker.current_state == pybreaker.STATE_OPEN)
 
     def get_status(self) -> dict[str, dict]:
         """
         Get status of all circuit breakers.
 
+        Thread-safe: Uses RLock to protect breakers list iteration.
+
         Returns:
             Dictionary with breaker name -> status info
         """
-        status = {}
-        for breaker in self.breakers:
-            # current_state is a string in pybreaker v1.4.1, not an enum
-            state = (
-                breaker.current_state
-                if isinstance(breaker.current_state, str)
-                else str(breaker.current_state)
-            )
-            status[breaker.name] = {
-                "state": state,
-                "fail_counter": breaker.fail_counter,
-                "fail_max": breaker.fail_max,
-                "reset_timeout": getattr(
-                    breaker, "reset_timeout", 60
-                ),  # timeout_duration -> reset_timeout
-            }
-        return status
+        with self._lock:
+            status = {}
+            for breaker in self.breakers:
+                # current_state is a string in pybreaker v1.4.1, not an enum
+                state = (
+                    breaker.current_state
+                    if isinstance(breaker.current_state, str)
+                    else str(breaker.current_state)
+                )
+                status[breaker.name] = {
+                    "state": state,
+                    "fail_counter": breaker.fail_counter,
+                    "fail_max": breaker.fail_max,
+                    "reset_timeout": getattr(
+                        breaker, "reset_timeout", 60
+                    ),  # timeout_duration -> reset_timeout
+                }
+            return status
 
     def log_status(self) -> None:
-        """Log current status of all breakers."""
+        """Log current status of all breakers.
+
+        Thread-safe: Uses get_status() which is already protected.
+        """
         status = self.get_status()
         for name, info in status.items():
             logger.info(
@@ -236,17 +249,25 @@ class CircuitBreakerMonitor:
             )
 
     def is_any_open(self) -> bool:
-        """Check if any circuit breaker is open."""
-        return any(breaker.current_state == pybreaker.STATE_OPEN for breaker in self.breakers)
+        """Check if any circuit breaker is open.
+
+        Thread-safe: Uses RLock to protect breakers list iteration.
+        """
+        with self._lock:
+            return any(breaker.current_state == pybreaker.STATE_OPEN for breaker in self.breakers)
 
     def reset_all(self) -> None:
-        """Reset all circuit breakers to closed state."""
-        for breaker in self.breakers:
-            try:
-                breaker.close()
-                logger.info(f"Reset circuit breaker: {breaker.name}")
-            except Exception as e:
-                logger.error(f"Failed to reset breaker {breaker.name}: {e}")
+        """Reset all circuit breakers to closed state.
+
+        Thread-safe: Uses RLock to protect breakers list iteration and state changes.
+        """
+        with self._lock:
+            for breaker in self.breakers:
+                try:
+                    breaker.close()
+                    logger.info(f"Reset circuit breaker: {breaker.name}")
+                except Exception as e:
+                    logger.error(f"Failed to reset breaker {breaker.name}: {e}")
 
 
 # Global monitor instance

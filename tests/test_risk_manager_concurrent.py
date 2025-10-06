@@ -39,7 +39,7 @@ class TestRiskManagerConcurrency:
                 try:
                     is_valid, reason = rm.validate_trade(
                         symbol=f"BTC{thread_id}USDT",  # Different symbols to avoid duplicate check
-                        quote_qty=Decimal("10.0"),
+                        quote_qty=4.0,  # Under MAX_LOSS_PER_TRADE=5.0
                         side="BUY",
                         strategy_id=f"thread_{thread_id}_trade_{i}",
                     )
@@ -67,7 +67,11 @@ class TestRiskManagerConcurrency:
 
     def test_concurrent_position_limit_enforcement(self):
         """Test MAX_POSITIONS enforced correctly under concurrent load."""
-        rm = RiskManager(position_tracker=PositionTracker(), max_positions=3)
+        rm = RiskManager(
+            position_tracker=PositionTracker(),
+            max_positions=3,
+            max_loss_per_trade=Decimal("20.0"),  # Allow $10 trades
+        )
 
         accepted = []
         rejected = []
@@ -88,9 +92,9 @@ class TestRiskManagerConcurrency:
                         # Simulate opening position
                         rm.position_tracker.open_position(
                             symbol=symbol,
-                            entry_price=Decimal("100.0"),
                             quantity=Decimal("0.1"),
-                            side="LONG",
+                            entry_price=Decimal("100.0"),
+                            order_id=f"ORDER_{thread_id}_{i}",
                         )
                         accepted.append((thread_id, i, symbol))
                     else:
@@ -119,7 +123,11 @@ class TestRiskManagerConcurrency:
 
     def test_kill_switch_activation_under_concurrent_load(self):
         """Test kill-switch activated correctly when multiple threads trigger losses."""
-        rm = RiskManager(position_tracker=PositionTracker(), max_daily_loss=Decimal("50.0"))
+        rm = RiskManager(
+            position_tracker=PositionTracker(),
+            max_daily_loss=Decimal("50.0"),
+            max_loss_per_trade=Decimal("20.0"),  # Allow $12 losses
+        )
 
         kill_switch_activated = []
         errors = []
@@ -157,7 +165,9 @@ class TestRiskManagerConcurrency:
     def test_cool_down_period_thread_safety(self):
         """Test cool-down period correctly enforced across threads."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), cool_down_minutes=1  # 1 minute cool-down
+            position_tracker=PositionTracker(),
+            cool_down_minutes=1,  # 1 minute cool-down
+            max_loss_per_trade=Decimal("20.0"),  # Allow $10 trades
         )
 
         # Trigger cool-down
@@ -202,7 +212,9 @@ class TestRiskManagerConcurrency:
 
     def test_daily_pnl_calculation_concurrency(self):
         """Test get_daily_pnl() thread-safe when called concurrently."""
-        rm = RiskManager(position_tracker=PositionTracker())
+        rm = RiskManager(
+            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+        )
 
         # Record some PnL
         rm.record_win(Decimal("15.0"))
@@ -244,7 +256,9 @@ class TestRiskManagerConcurrency:
 
     def test_audit_trail_concurrent_writes(self):
         """Test audit trail writes are thread-safe (no corruption)."""
-        rm = RiskManager(position_tracker=PositionTracker())
+        rm = RiskManager(
+            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+        )
 
         # Clear audit trail
         if Path(AUDIT_TRAIL_PATH).exists():
@@ -289,11 +303,16 @@ class TestRiskManagerConcurrency:
 
     def test_concurrent_duplicate_position_detection(self):
         """Test duplicate position check works correctly under concurrency."""
-        rm = RiskManager(position_tracker=PositionTracker())
+        rm = RiskManager(
+            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+        )
 
         # Pre-open a position
         rm.position_tracker.open_position(
-            symbol="BTCUSDT", entry_price=Decimal("43000.0"), quantity=Decimal("0.1"), side="LONG"
+            symbol="BTCUSDT",
+            quantity=Decimal("0.1"),
+            entry_price=Decimal("43000.0"),
+            order_id="PRE_ORDER_1",
         )
 
         duplicate_rejections = []
@@ -333,12 +352,17 @@ class TestRiskManagerConcurrency:
     def test_sell_orders_bypass_limits_concurrently(self):
         """Test SELL orders correctly bypass limits under concurrent load."""
         rm = RiskManager(
-            position_tracker=PositionTracker(), max_positions=1  # Only 1 position allowed
+            position_tracker=PositionTracker(),
+            max_positions=1,  # Only 1 position allowed
+            max_loss_per_trade=Decimal("20.0"),  # Allow $10 trades
         )
 
         # Open max positions
         rm.position_tracker.open_position(
-            symbol="BTCUSDT", entry_price=Decimal("43000.0"), quantity=Decimal("0.1"), side="LONG"
+            symbol="BTCUSDT",
+            quantity=Decimal("0.1"),
+            entry_price=Decimal("43000.0"),
+            order_id="PRE_ORDER_2",
         )
 
         sell_approved = []
@@ -393,7 +417,9 @@ class TestRiskManagerConcurrency:
 
     def test_reset_daily_state_concurrency(self):
         """Test reset_daily_state() thread-safe when called concurrently."""
-        rm = RiskManager(position_tracker=PositionTracker())
+        rm = RiskManager(
+            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+        )
 
         # Prime with data
         rm.record_win(Decimal("10.0"))
@@ -427,7 +453,9 @@ class TestRiskManagerConcurrency:
 
     def test_get_risk_status_concurrent_reads(self):
         """Test get_risk_status() thread-safe for concurrent reads."""
-        rm = RiskManager(position_tracker=PositionTracker())
+        rm = RiskManager(
+            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+        )
 
         # Prime with data
         rm.record_win(Decimal("10.0"))
@@ -470,7 +498,9 @@ class TestRiskManagerConcurrencyStress:
 
     def test_high_volume_validation_burst(self):
         """Test 1000 validations from 10 threads in rapid succession."""
-        rm = RiskManager(position_tracker=PositionTracker())
+        rm = RiskManager(
+            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+        )
 
         results = []
         errors = []
@@ -512,7 +542,9 @@ class TestRiskManagerConcurrencyStress:
     @pytest.mark.slow
     def test_sustained_concurrent_validation(self):
         """Test 5 threads × 500 validations over 10 seconds."""
-        rm = RiskManager(position_tracker=PositionTracker())
+        rm = RiskManager(
+            position_tracker=PositionTracker(), max_loss_per_trade=Decimal("20.0")
+        )
 
         results = []
         errors = []
