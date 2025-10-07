@@ -257,7 +257,7 @@ class TestWebSocketConcurrency:
         stream.start()
 
         def record_messages(thread_id: int):
-            for i in range(100):
+            for _i in range(100):
                 stream.health_monitor.record_message()
                 time.sleep(0.001)
 

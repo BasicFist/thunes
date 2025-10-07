@@ -51,19 +51,6 @@ def run_backtest(
     # Fetch data
     # Calculate required klines based on timeframe
     # For 90 days: 1h=2160, 4h=540, 1d=90
-    timeframe_hours = {
-        "1m": 1 / 60,
-        "5m": 5 / 60,
-        "15m": 15 / 60,
-        "30m": 30 / 60,
-        "1h": 1,
-        "2h": 2,
-        "4h": 4,
-        "6h": 6,
-        "12h": 12,
-        "1d": 24,
-        "1w": 24 * 7,
-    }
     # Note: No longer need to calculate required_klines - auto-pagination fetches all data
 
     # Use production Binance for historical data (public endpoint, no auth required)

@@ -20,6 +20,7 @@ def mock_position_tracker() -> Mock:
     tracker.get_all_open_positions.return_value = []
     tracker.has_open_position.return_value = False
     tracker.get_position_history.return_value = []
+    tracker.count_open_positions.return_value = 0  # Added in Sprint 1.7 for atomic counting
     return tracker
 
 
@@ -73,6 +74,7 @@ def test_validate_trade_rejects_when_max_positions_reached(
     """Test trade validation fails when max positions limit reached."""
     # Mock 3 open positions (default MAX_POSITIONS=3)
     mock_position_tracker.get_all_open_positions.return_value = [Mock(), Mock(), Mock()]
+    mock_position_tracker.count_open_positions.return_value = 3  # Atomic count
 
     is_valid, msg = risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=4.0, side="BUY")
 
@@ -234,6 +236,7 @@ def test_record_win_clears_cool_down(risk_manager: RiskManager) -> None:
 def test_get_risk_status(risk_manager: RiskManager, mock_position_tracker: Mock) -> None:
     """Test risk status reporting."""
     mock_position_tracker.get_all_open_positions.return_value = [Mock()]
+    mock_position_tracker.count_open_positions.return_value = 1  # Atomic count
 
     status = risk_manager.get_risk_status()
 

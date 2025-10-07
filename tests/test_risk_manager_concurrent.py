@@ -155,7 +155,9 @@ class TestRiskManagerConcurrency:
         assert len(accepted) == 3, f"Expected 3 accepted, got {len(accepted)}"
 
         # Verify remaining 22 rejected with "MAX_POSITIONS" reason
-        max_pos_rejections = [r for r in rejected if "MAX_POSITIONS" in r[3] or "Max position" in r[3]]
+        max_pos_rejections = [
+            r for r in rejected if "MAX_POSITIONS" in r[3] or "Max position" in r[3]
+        ]
         assert len(max_pos_rejections) >= 20  # Allow for timing variations
 
     def test_kill_switch_activation_under_concurrent_load(self, temp_db_path):
@@ -279,19 +281,25 @@ class TestRiskManagerConcurrency:
         rm.position_tracker.open_position(
             symbol="WIN1USDT", quantity=Decimal("1.0"), entry_price=Decimal("100.0"), order_id="W1"
         )
-        rm.position_tracker.close_position(symbol="WIN1USDT", exit_price=Decimal("115.0"), exit_order_id="W1_EXIT")
+        rm.position_tracker.close_position(
+            symbol="WIN1USDT", exit_price=Decimal("115.0"), exit_order_id="W1_EXIT"
+        )
 
         # Position 2: -$5 (entry=100, exit=95, qty=1)
         rm.position_tracker.open_position(
             symbol="LOSS1USDT", quantity=Decimal("1.0"), entry_price=Decimal("100.0"), order_id="L1"
         )
-        rm.position_tracker.close_position(symbol="LOSS1USDT", exit_price=Decimal("95.0"), exit_order_id="L1_EXIT")
+        rm.position_tracker.close_position(
+            symbol="LOSS1USDT", exit_price=Decimal("95.0"), exit_order_id="L1_EXIT"
+        )
 
         # Position 3: +$20 (entry=100, exit=120, qty=1)
         rm.position_tracker.open_position(
             symbol="WIN2USDT", quantity=Decimal("1.0"), entry_price=Decimal("100.0"), order_id="W2"
         )
-        rm.position_tracker.close_position(symbol="WIN2USDT", exit_price=Decimal("120.0"), exit_order_id="W2_EXIT")
+        rm.position_tracker.close_position(
+            symbol="WIN2USDT", exit_price=Decimal("120.0"), exit_order_id="W2_EXIT"
+        )
 
         pnl_results = []
         errors = []
@@ -500,7 +508,9 @@ class TestRiskManagerConcurrency:
         rm.position_tracker.open_position(
             symbol="TESTSDT", quantity=Decimal("1.0"), entry_price=Decimal("100.0"), order_id="T1"
         )
-        rm.position_tracker.close_position(symbol="TESTSDT", exit_price=Decimal("105.0"), exit_order_id="T1_EXIT")
+        rm.position_tracker.close_position(
+            symbol="TESTSDT", exit_price=Decimal("105.0"), exit_order_id="T1_EXIT"
+        )
 
         # Trigger cool-down
         rm.record_loss()
@@ -513,7 +523,7 @@ class TestRiskManagerConcurrency:
 
         def reset_state(thread_id: int):
             try:
-                for i in range(10):
+                for _i in range(10):
                     rm.reset_daily_state()
                     time.sleep(0.01)
 
@@ -543,9 +553,14 @@ class TestRiskManagerConcurrency:
 
         # Prime with PnL data via actual positions (+$5 net)
         rm.position_tracker.open_position(
-            symbol="STATUS1USDT", quantity=Decimal("1.0"), entry_price=Decimal("100.0"), order_id="S1"
+            symbol="STATUS1USDT",
+            quantity=Decimal("1.0"),
+            entry_price=Decimal("100.0"),
+            order_id="S1",
         )
-        rm.position_tracker.close_position(symbol="STATUS1USDT", exit_price=Decimal("105.0"), exit_order_id="S1_EXIT")
+        rm.position_tracker.close_position(
+            symbol="STATUS1USDT", exit_price=Decimal("105.0"), exit_order_id="S1_EXIT"
+        )
 
         # Trigger cool-down
         rm.record_loss()

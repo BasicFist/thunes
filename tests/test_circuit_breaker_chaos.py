@@ -39,7 +39,7 @@ class TestCircuitBreakerChaos:
         binance_api_breaker.close()
 
         def api_call_failure(thread_id: int):
-            for i in range(50):
+            for _i in range(50):
                 try:
 
                     @binance_api_breaker.call
@@ -130,7 +130,7 @@ class TestCircuitBreakerChaos:
 
         def reset_circuit(thread_id: int):
             try:
-                for i in range(10):
+                for _i in range(10):
                     circuit_monitor.reset_all()
                     time.sleep(0.01)
             except Exception as e:
@@ -218,7 +218,7 @@ class TestCircuitBreakerChaos:
 
         def reset_all_circuits(thread_id: int):
             try:
-                for i in range(20):
+                for _i in range(20):
                     circuit_monitor.reset_all()
                     time.sleep(0.01)
             except Exception as e:
@@ -366,7 +366,7 @@ class TestCircuitBreakerChaos:
         binance_api_breaker.add_listener(state_listener)
 
         def trigger_state_changes(thread_id: int):
-            for i in range(5):
+            for _i in range(5):
                 try:
 
                     @binance_api_breaker.call
@@ -410,7 +410,7 @@ class TestCircuitBreakerChaos:
                         def success():
                             return "OK"
 
-                        result = success()
+                        success()
                         with lock:
                             results.append(
                                 (thread_id, i, "success", binance_api_breaker.current_state)
@@ -519,7 +519,7 @@ class TestCircuitBreakerConcurrencyStress:
 
         def rapid_failures(thread_id: int):
             try:
-                for i in range(100):
+                for _i in range(100):
                     try:
 
                         @binance_api_breaker.call
@@ -576,7 +576,7 @@ class TestCircuitBreakerConcurrencyStress:
                                 raise BinanceAPIException(None, 503, "Sustained Fail")
                             return "OK"
 
-                        result = api_call()
+                        api_call()
 
                         with lock:
                             results.append((thread_id, i, "success"))
@@ -632,7 +632,7 @@ class TestCircuitBreakerConcurrencyStress:
 
         def continuous_resets(thread_id: int):
             try:
-                for i in range(20):
+                for _i in range(20):
                     circuit_monitor.reset_all()
                     time.sleep(0.1)
             except Exception as e:
