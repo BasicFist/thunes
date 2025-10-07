@@ -1,5 +1,13 @@
 name: CI
 
+# ENFORCEMENT POLICY (Phase 13 Sprint 1.13):
+# All quality gates MUST pass before merge. Failures block merges to protect main branch.
+# - Ruff linting (code style)
+# - Black formatting (consistent formatting)
+# - Mypy type checking (type safety)
+# - Pytest (205+/228 tests passing)
+# This prevents the documentation drift that allowed broken tests to reach main.
+
 on:
   push:
     branches: [main, develop]
@@ -31,17 +39,47 @@ jobs:
         # heavy research dependencies (vectorbt, optuna, matplotlib, jupyter)
 
       - name: Run ruff (linting)
-        run: ruff check src tests
+        run: |
+          ruff check src tests
+          if [ $? -ne 0 ]; then
+            echo "::error::Ruff linting failed - fix issues before merge"
+            exit 1
+          fi
 
       - name: Run black (formatting check)
-        run: black --check src tests
+        run: |
+          black --check src tests
+          if [ $? -ne 0 ]; then
+            echo "::error::Black formatting check failed - run 'make format' to fix"
+            exit 1
+          fi
 
       - name: Run mypy (type checking)
-        run: mypy src
+        run: |
+          mypy src
+          if [ $? -ne 0 ]; then
+            echo "::error::Type checking failed - fix type hints before merge"
+            exit 1
+          fi
 
       - name: Run tests with coverage
         run: |
+          set -e  # Exit immediately on test failure
           pytest -v --cov=src --cov-report=xml --cov-report=term-missing
+          # Explicit exit code check (pytest returns non-zero on failures)
+          if [ $? -ne 0 ]; then
+            echo "::error::Tests failed - blocking merge to protect main branch"
+            exit 1
+          fi
+
+      - name: Verify test passage (deployment gate)
+        if: always()
+        run: |
+          if [ ! -f coverage.xml ]; then
+            echo "::error::No coverage report generated - tests may have crashed"
+            exit 1
+          fi
+          echo "✅ Tests passed - deployment gate satisfied"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
