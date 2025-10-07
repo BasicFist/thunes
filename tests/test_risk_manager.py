@@ -4,6 +4,7 @@ import json
 from collections.abc import Generator
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -11,6 +12,29 @@ import pytest
 from src.config import settings
 from src.models.position import Position, PositionTracker
 from src.risk.manager import AUDIT_TRAIL_PATH, RiskManager
+
+
+@pytest.fixture
+def isolated_audit_trail(tmp_path: Path, monkeypatch):
+    """
+    Create isolated audit trail for each test.
+
+    Prevents race conditions in parallel test execution by giving each test
+    its own temporary audit_trail.jsonl file. Uses pytest's tmp_path fixture
+    for automatic cleanup.
+
+    Args:
+        tmp_path: Pytest's temporary directory fixture
+        monkeypatch: Pytest's monkeypatch fixture for patching
+
+    Yields:
+        Path: Isolated audit trail file path
+    """
+    audit_file = tmp_path / "audit_trail.jsonl"
+    # Patch the module-level constant in src.risk.manager
+    monkeypatch.setattr("src.risk.manager.AUDIT_TRAIL_PATH", audit_file)
+    yield audit_file
+    # Cleanup is automatic via tmp_path
 
 
 @pytest.fixture
@@ -272,16 +296,16 @@ class TestAuditTrail:
     """Tests for audit trail functionality."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_audit_trail(self) -> Generator[None, None, None]:
-        """Remove audit trail file before/after tests."""
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
-        yield
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
+    def use_isolated_audit_trail(self, isolated_audit_trail: Path):
+        """Automatically use isolated audit trail for all tests in this class."""
+        # The isolated_audit_trail fixture handles patching and cleanup
+        return isolated_audit_trail
 
     def test_audit_trail_created_on_kill_switch(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test audit trail entry created when kill-switch activated."""
         # Mock Telegram to avoid actual network calls
@@ -289,10 +313,10 @@ class TestAuditTrail:
             risk_manager.activate_kill_switch(reason="Test activation")
 
         # Verify audit trail file created
-        assert AUDIT_TRAIL_PATH.exists()
+        assert isolated_audit_trail.exists()
 
         # Read and verify audit entry
-        with open(AUDIT_TRAIL_PATH) as f:
+        with open(isolated_audit_trail) as f:
             entries = [json.loads(line) for line in f]
 
         assert len(entries) == 1
@@ -304,7 +328,10 @@ class TestAuditTrail:
         assert "circuit_breaker_status" in entry
 
     def test_audit_trail_logs_trade_rejections(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test audit trail logs rejected trades."""
         # Activate kill-switch to trigger rejection
@@ -312,7 +339,7 @@ class TestAuditTrail:
             risk_manager.activate_kill_switch()
 
         # Clear audit trail from kill-switch activation
-        AUDIT_TRAIL_PATH.unlink()
+        isolated_audit_trail.unlink()
 
         # Attempt trade (should be rejected)
         is_valid, msg = risk_manager.validate_trade(
@@ -322,7 +349,7 @@ class TestAuditTrail:
         assert is_valid is False
 
         # Verify rejection logged
-        with open(AUDIT_TRAIL_PATH) as f:
+        with open(isolated_audit_trail) as f:
             entries = [json.loads(line) for line in f]
 
         assert len(entries) == 1
@@ -333,7 +360,10 @@ class TestAuditTrail:
         assert entry["strategy_id"] == "test_strategy"
 
     def test_audit_trail_logs_trade_approvals(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test audit trail logs approved trades."""
         is_valid, msg = risk_manager.validate_trade(
@@ -343,7 +373,7 @@ class TestAuditTrail:
         assert is_valid is True
 
         # Verify approval logged
-        with open(AUDIT_TRAIL_PATH) as f:
+        with open(isolated_audit_trail) as f:
             entries = [json.loads(line) for line in f]
 
         assert len(entries) == 1
@@ -354,7 +384,9 @@ class TestAuditTrail:
         assert entry["quote_qty"] == 4.0
         assert entry["strategy_id"] == "rsi_strategy"
 
-    def test_audit_trail_logs_kill_switch_deactivation(self, risk_manager: RiskManager) -> None:
+    def test_audit_trail_logs_kill_switch_deactivation(
+        self, risk_manager: RiskManager, isolated_audit_trail: Path
+    ) -> None:
         """Test audit trail logs kill-switch deactivation."""
         # Activate then deactivate
         with patch("src.alerts.telegram.TelegramBot"):
@@ -362,7 +394,7 @@ class TestAuditTrail:
         risk_manager.deactivate_kill_switch(reason="Manual override")
 
         # Read all entries
-        with open(AUDIT_TRAIL_PATH) as f:
+        with open(isolated_audit_trail) as f:
             entries = [json.loads(line) for line in f]
 
         # Should have 2 entries: activation + deactivation
@@ -372,7 +404,10 @@ class TestAuditTrail:
         assert entries[1]["reason"] == "Manual override"
 
     def test_audit_trail_jsonl_format(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test audit trail uses JSONL format (one JSON per line)."""
         # Create multiple events
@@ -380,7 +415,7 @@ class TestAuditTrail:
         risk_manager.validate_trade("ETHUSDT", 3.0, "BUY", "strategy2")
 
         # Verify each line is valid JSON
-        with open(AUDIT_TRAIL_PATH) as f:
+        with open(isolated_audit_trail) as f:
             lines = f.readlines()
 
         assert len(lines) == 2
@@ -389,7 +424,9 @@ class TestAuditTrail:
             assert "event" in entry
             assert "timestamp" in entry
 
-    def test_kill_switch_allows_sell_orders(self, risk_manager: RiskManager) -> None:
+    def test_kill_switch_allows_sell_orders(
+        self, risk_manager: RiskManager, isolated_audit_trail: Path
+    ) -> None:
         """Test that kill-switch blocks BUY but allows SELL orders to exit positions."""
         # Activate kill-switch
         with patch("src.alerts.telegram.TelegramBot"):
@@ -414,17 +451,16 @@ class TestTelegramIntegration:
     """Tests for Telegram alert integration."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_audit_trail(self) -> Generator[None, None, None]:
-        """Remove audit trail file before/after tests."""
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
-        yield
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
+    def use_isolated_audit_trail(self, isolated_audit_trail: Path):
+        """Automatically use isolated audit trail for all tests in this class."""
+        return isolated_audit_trail
 
     @patch("src.alerts.telegram.TelegramBot")
     def test_kill_switch_sends_telegram_alert(
-        self, mock_telegram_class: Mock, risk_manager: RiskManager
+        self,
+        mock_telegram_class: Mock,
+        risk_manager: RiskManager,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test kill-switch activation sends Telegram alert."""
         mock_telegram_instance = Mock()
@@ -438,7 +474,10 @@ class TestTelegramIntegration:
 
     @patch("src.alerts.telegram.TelegramBot")
     def test_kill_switch_handles_telegram_failure_gracefully(
-        self, mock_telegram_class: Mock, risk_manager: RiskManager
+        self,
+        mock_telegram_class: Mock,
+        risk_manager: RiskManager,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test kill-switch activation continues even if Telegram fails."""
         # Make Telegram raise an exception
@@ -450,41 +489,43 @@ class TestTelegramIntegration:
         assert risk_manager.kill_switch_active is True
 
         # Audit trail should still be written
-        assert AUDIT_TRAIL_PATH.exists()
+        assert isolated_audit_trail.exists()
 
 
 class TestValidateTradeStrategyId:
     """Tests for strategy_id parameter in validate_trade."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_audit_trail(self) -> Generator[None, None, None]:
-        """Remove audit trail file before/after tests."""
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
-        yield
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
+    def use_isolated_audit_trail(self, isolated_audit_trail: Path):
+        """Automatically use isolated audit trail for all tests in this class."""
+        return isolated_audit_trail
 
     def test_strategy_id_included_in_audit_log(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test strategy_id is captured in audit log."""
         risk_manager.validate_trade(
             symbol="BTCUSDT", quote_qty=4.0, side="BUY", strategy_id="rsi_conservative"
         )
 
-        with open(AUDIT_TRAIL_PATH) as f:
+        with open(isolated_audit_trail) as f:
             entry = json.loads(f.readline())
 
         assert entry["strategy_id"] == "rsi_conservative"
 
     def test_default_strategy_id(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test default strategy_id when not provided."""
         risk_manager.validate_trade(symbol="BTCUSDT", quote_qty=4.0, side="BUY")
 
-        with open(AUDIT_TRAIL_PATH) as f:
+        with open(isolated_audit_trail) as f:
             entry = json.loads(f.readline())
 
         assert entry["strategy_id"] == "unknown"
@@ -494,17 +535,16 @@ class TestCircuitBreakerIntegration:
     """Tests for circuit breaker integration with RiskManager."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_audit_trail(self) -> Generator[None, None, None]:
-        """Remove audit trail file before/after tests."""
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
-        yield
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
+    def use_isolated_audit_trail(self, isolated_audit_trail: Path):
+        """Automatically use isolated audit trail for all tests in this class."""
+        return isolated_audit_trail
 
     @patch("src.risk.manager.circuit_monitor")
     def test_validate_trade_rejects_when_circuit_breaker_open(
-        self, mock_circuit_monitor: Mock, risk_manager: RiskManager
+        self,
+        mock_circuit_monitor: Mock,
+        risk_manager: RiskManager,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test trade validation fails when circuit breaker is open."""
         # Mock circuit breaker as open
@@ -524,7 +564,7 @@ class TestCircuitBreakerIntegration:
         assert "circuit breaker" in msg.lower()
 
         # Verify audit trail
-        with open(AUDIT_TRAIL_PATH) as f:
+        with open(isolated_audit_trail) as f:
             entry = json.loads(f.readline())
 
         assert entry["event"] == "TRADE_REJECTED"
@@ -533,7 +573,10 @@ class TestCircuitBreakerIntegration:
 
     @patch("src.risk.manager.circuit_monitor")
     def test_validate_trade_passes_when_circuit_breaker_closed(
-        self, mock_circuit_monitor: Mock, risk_manager: RiskManager
+        self,
+        mock_circuit_monitor: Mock,
+        risk_manager: RiskManager,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test trade validation passes when circuit breaker is closed."""
         mock_circuit_monitor.is_any_open.return_value = False
@@ -616,17 +659,16 @@ class TestAuditLogWriteFailure:
     """Tests for audit log write failure handling."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_audit_trail(self) -> Generator[None, None, None]:
-        """Remove audit trail file before/after tests."""
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
-        yield
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
+    def use_isolated_audit_trail(self, isolated_audit_trail: Path):
+        """Automatically use isolated audit trail for all tests in this class."""
+        return isolated_audit_trail
 
     @patch("builtins.open", side_effect=PermissionError("Permission denied"))
     def test_audit_log_write_failure_logged_but_not_raised(
-        self, mock_open: Mock, risk_manager: RiskManager
+        self,
+        mock_open: Mock,
+        risk_manager: RiskManager,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test audit log write failures are logged but don't crash."""
         # This should not raise an exception even though open() fails
@@ -703,17 +745,16 @@ class TestKillSwitchEdgeCases:
     """Tests for kill-switch edge cases."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_audit_trail(self) -> Generator[None, None, None]:
-        """Remove audit trail file before/after tests."""
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
-        yield
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
+    def use_isolated_audit_trail(self, isolated_audit_trail: Path):
+        """Automatically use isolated audit trail for all tests in this class."""
+        return isolated_audit_trail
 
     @patch("src.alerts.telegram.TelegramBot")
     def test_deactivate_kill_switch_when_already_inactive(
-        self, mock_telegram_class: Mock, risk_manager: RiskManager
+        self,
+        mock_telegram_class: Mock,
+        risk_manager: RiskManager,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test deactivating kill-switch when it's already inactive."""
         # Kill-switch is inactive by default
@@ -727,7 +768,10 @@ class TestKillSwitchEdgeCases:
 
     @patch("src.alerts.telegram.TelegramBot")
     def test_activate_kill_switch_when_already_active(
-        self, mock_telegram_class: Mock, risk_manager: RiskManager
+        self,
+        mock_telegram_class: Mock,
+        risk_manager: RiskManager,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test activating kill-switch when it's already active."""
         # Activate first time
@@ -735,30 +779,29 @@ class TestKillSwitchEdgeCases:
         assert risk_manager.kill_switch_active is True
 
         # Clear audit trail
-        AUDIT_TRAIL_PATH.unlink()
+        isolated_audit_trail.unlink()
 
         # Activate again - should be idempotent
         risk_manager.activate_kill_switch(reason="Second activation")
         assert risk_manager.kill_switch_active is True
 
         # Should NOT create audit log entry (already active)
-        assert not AUDIT_TRAIL_PATH.exists()
+        assert not isolated_audit_trail.exists()
 
 
 class TestSellOrderValidation:
     """Tests for SELL order validation logic."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_audit_trail(self) -> Generator[None, None, None]:
-        """Remove audit trail file before/after tests."""
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
-        yield
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
+    def use_isolated_audit_trail(self, isolated_audit_trail: Path):
+        """Automatically use isolated audit trail for all tests in this class."""
+        return isolated_audit_trail
 
     def test_sell_order_ignores_per_trade_limit(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test SELL orders are not subject to per-trade loss limit."""
         # SELL with large quote_qty that would exceed limit for BUY
@@ -799,16 +842,15 @@ class TestConcurrentValidation:
     """Tests for concurrent trade validation edge cases."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_audit_trail(self) -> Generator[None, None, None]:
-        """Remove audit trail file before/after tests."""
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
-        yield
-        if AUDIT_TRAIL_PATH.exists():
-            AUDIT_TRAIL_PATH.unlink()
+    def use_isolated_audit_trail(self, isolated_audit_trail: Path):
+        """Automatically use isolated audit trail for all tests in this class."""
+        return isolated_audit_trail
 
     def test_multiple_trades_same_symbol_rejected(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test multiple BUY orders for same symbol are rejected."""
         # First trade should pass
