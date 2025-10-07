@@ -10,6 +10,7 @@ This module implements critical safety features:
 - Telegram alerts for critical events
 """
 
+import fcntl
 import json
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -289,6 +290,10 @@ class RiskManager:
         """
         Write event to immutable audit trail for regulatory compliance.
 
+        Thread-safe and process-safe via:
+        - RLock for thread synchronization
+        - fcntl.flock for file-level locking (prevents cross-process corruption)
+
         Args:
             event: Event type (e.g., "KILL_SWITCH_ACTIVATED", "TRADE_REJECTED")
             details: Event-specific details dictionary
@@ -316,13 +321,20 @@ class RiskManager:
         # Ensure logs directory exists
         AUDIT_TRAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-        # Append to audit trail (JSONL format - one JSON object per line)
-        try:
-            with open(AUDIT_TRAIL_PATH, "a") as f:
-                f.write(json.dumps(audit_entry) + "\n")
-            logger.debug(f"Audit log written: {event}")
-        except Exception as e:
-            logger.error(f"Failed to write audit log: {e}")
+        # Thread-safe write with file locking for process safety
+        with self._lock:  # Thread-level synchronization
+            try:
+                with open(AUDIT_TRAIL_PATH, "a") as f:
+                    # File-level lock (prevents corruption from concurrent processes)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    try:
+                        f.write(json.dumps(audit_entry) + "\n")
+                        f.flush()  # Ensure write completes before unlock
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                logger.debug(f"Audit log written: {event}")
+            except Exception as e:
+                logger.error(f"Failed to write audit log: {e}")
 
     def activate_kill_switch(self, reason: str = "Daily loss limit exceeded") -> None:
         """
