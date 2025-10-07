@@ -267,7 +267,9 @@ class CircuitBreakerMonitor:
                     breaker.close()
                     logger.info(f"Reset circuit breaker: {breaker.name}")
                 except Exception as e:
-                    logger.error(f"Failed to reset breaker {breaker.name}: {e}")
+                    # Defensive: breaker might be corrupted, avoid accessing .name again
+                    breaker_name = getattr(breaker, 'name', repr(breaker))
+                    logger.error(f"Failed to reset breaker {breaker_name}: {e}")
 
 
 # Global monitor instance

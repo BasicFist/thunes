@@ -16,6 +16,7 @@ Test Categories:
 import threading
 import time
 
+import pybreaker
 import pytest
 from binance.exceptions import BinanceAPIException
 
@@ -61,7 +62,7 @@ class TestCircuitBreakerChaos:
             t.join()
 
         # Verify circuit opened (after 5 consecutive failures)
-        assert binance_api_breaker.current_state == "open"
+        assert binance_api_breaker.current_state == pybreaker.STATE_OPEN
 
         # Verify fail counter >= 5 (may be higher due to concurrent increments)
         assert binance_api_breaker.fail_counter >= 5
@@ -120,7 +121,7 @@ class TestCircuitBreakerChaos:
             except:
                 pass
 
-        assert binance_api_breaker.current_state == "open"
+        assert binance_api_breaker.current_state == pybreaker.STATE_OPEN
 
         # Manually force HALF_OPEN (simulate timeout elapsed)
         binance_api_breaker._state = "half-open"
@@ -147,7 +148,7 @@ class TestCircuitBreakerChaos:
         assert len(errors) == 0, f"Errors during reset: {errors}"
 
         # Verify transitioned to CLOSED
-        assert binance_api_breaker.current_state == "closed"
+        assert binance_api_breaker.current_state == pybreaker.STATE_CLOSED
         assert binance_api_breaker.fail_counter == 0
 
     def test_concurrent_is_open_checks(self):
@@ -166,7 +167,7 @@ class TestCircuitBreakerChaos:
             except:
                 pass
 
-        assert binance_api_breaker.current_state == "open"
+        assert binance_api_breaker.current_state == pybreaker.STATE_OPEN
 
         is_open_results = []
         errors = []
@@ -212,7 +213,7 @@ class TestCircuitBreakerChaos:
             except:
                 pass
 
-        assert binance_api_breaker.current_state == "open"
+        assert binance_api_breaker.current_state == pybreaker.STATE_OPEN
 
         errors = []
 
@@ -235,7 +236,7 @@ class TestCircuitBreakerChaos:
         assert len(errors) == 0, f"Errors: {errors}"
 
         # Verify all circuits closed
-        assert binance_api_breaker.current_state == "closed"
+        assert binance_api_breaker.current_state == pybreaker.STATE_CLOSED
         assert binance_api_breaker.fail_counter == 0
 
     def test_half_open_success_recovery(self):
@@ -254,10 +255,11 @@ class TestCircuitBreakerChaos:
             except:
                 pass
 
-        assert binance_api_breaker.current_state == "open"
+        assert binance_api_breaker.current_state == pybreaker.STATE_OPEN
 
-        # Force HALF_OPEN
-        binance_api_breaker._state = "half-open"
+        # Force HALF_OPEN by creating proper state object with previous state
+        prev_state = binance_api_breaker._state
+        binance_api_breaker._state = pybreaker.CircuitHalfOpenState(binance_api_breaker, prev_state)
 
         # Successful call should transition to CLOSED
         @binance_api_breaker.call
@@ -267,7 +269,7 @@ class TestCircuitBreakerChaos:
         result = success()
 
         assert result == "OK"
-        assert binance_api_breaker.current_state == "closed"
+        assert binance_api_breaker.current_state == pybreaker.STATE_CLOSED
         assert binance_api_breaker.fail_counter == 0
 
     def test_half_open_failure_reopen(self):
@@ -286,10 +288,11 @@ class TestCircuitBreakerChaos:
             except:
                 pass
 
-        assert binance_api_breaker.current_state == "open"
+        assert binance_api_breaker.current_state == pybreaker.STATE_OPEN
 
-        # Force HALF_OPEN
-        binance_api_breaker._state = "half-open"
+        # Force HALF_OPEN by creating proper state object with previous state
+        prev_state = binance_api_breaker._state
+        binance_api_breaker._state = pybreaker.CircuitHalfOpenState(binance_api_breaker, prev_state)
 
         # Failed call should re-open circuit
         try:
@@ -303,7 +306,7 @@ class TestCircuitBreakerChaos:
             pass
 
         # Verify circuit re-opened
-        assert binance_api_breaker.current_state == "open"
+        assert binance_api_breaker.current_state == pybreaker.STATE_OPEN
 
     def test_circuit_monitor_get_status_concurrent(self):
         """Test circuit_monitor.get_status() thread-safe for concurrent reads."""
@@ -548,7 +551,7 @@ class TestCircuitBreakerConcurrencyStress:
         assert len(errors) == 0, f"Errors: {errors}"
 
         # Verify circuit opened
-        assert binance_api_breaker.current_state == "open"
+        assert binance_api_breaker.current_state == pybreaker.STATE_OPEN
 
         # Verify completed quickly (<2 seconds)
         assert elapsed < 2.0, f"High-volume test took {elapsed}s (expected <2s)"
@@ -662,4 +665,4 @@ class TestCircuitBreakerConcurrencyStress:
 
         # Verify circuit eventually closed (after final reset)
         circuit_monitor.reset_all()
-        assert binance_api_breaker.current_state == "closed"
+        assert binance_api_breaker.current_state == pybreaker.STATE_CLOSED

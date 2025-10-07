@@ -811,7 +811,10 @@ class TestSellOrderValidation:
         assert is_valid is True
 
     def test_sell_order_ignores_position_count_limit(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test SELL orders are not subject to position count limit."""
         # Mock max positions reached
@@ -827,7 +830,10 @@ class TestSellOrderValidation:
         assert is_valid is True
 
     def test_sell_order_ignores_duplicate_position_check(
-        self, risk_manager: RiskManager, mock_position_tracker: Mock
+        self,
+        risk_manager: RiskManager,
+        mock_position_tracker: Mock,
+        isolated_audit_trail: Path,
     ) -> None:
         """Test SELL orders are not subject to duplicate position check."""
         mock_position_tracker.has_open_position.return_value = True
