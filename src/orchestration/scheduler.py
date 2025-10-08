@@ -175,6 +175,32 @@ class TradingScheduler:
         )
         logger.info(f"Scheduled daily summary at {hour:02d}:{minute:02d} UTC")
 
+    def schedule_lab_metrics_update(self, interval_seconds: int = 30) -> None:
+        """Schedule periodic LAB infrastructure metrics updates.
+
+        Args:
+            interval_seconds: How often to update metrics (default: 30)
+
+        The job will:
+        - Run every N seconds
+        - Check MCP server health (18 servers)
+        - Read worktree metadata (5 worktrees)
+        - Update Prometheus metrics for Grafana
+        - No parameters needed (uses LAB workspace configuration)
+        """
+        # Use textual reference for SQLite serialization
+        # No parameters needed - script reads LAB workspace directly
+        self.scheduler.add_job(
+            func="src.orchestration.jobs:update_lab_infrastructure_metrics",
+            trigger="interval",
+            seconds=interval_seconds,
+            kwargs={},
+            id="lab_metrics_update",
+            replace_existing=True,
+            name="LAB Metrics Update",
+        )
+        logger.info(f"Scheduled LAB metrics updates every {interval_seconds} seconds")
+
     def start(self) -> None:
         """Start the scheduler.
 

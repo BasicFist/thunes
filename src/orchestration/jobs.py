@@ -156,3 +156,48 @@ Circuit Breaker: {'🟢 Closed' if not circuit_monitor.is_open('BinanceAPI') els
     except Exception as e:
         logger.error(f"Daily summary failed: {e}", exc_info=True)
         # Don't re-raise - let scheduler continue
+
+
+def update_lab_infrastructure_metrics() -> None:
+    """Update LAB infrastructure metrics (MCP health, worktree status).
+
+    This job runs periodically (default: every 30 seconds) to:
+    1. Check health of all 18 MCP servers
+    2. Read worktree metadata from 5 worktrees
+    3. Update Prometheus metrics for Grafana visualization
+
+    No arguments needed - uses LAB workspace configuration.
+
+    Returns:
+        None (updates Prometheus metrics)
+
+    Raises:
+        No exceptions (all errors caught and logged)
+    """
+    try:
+        import subprocess
+        from pathlib import Path
+
+        script_path = Path(__file__).parent.parent.parent / "scripts" / "update-lab-metrics.py"
+
+        logger.debug("Updating LAB infrastructure metrics")
+
+        # Run update script
+        result = subprocess.run(
+            ["python3", str(script_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        if result.returncode == 0:
+            logger.debug("LAB metrics updated successfully")
+        else:
+            logger.warning(f"LAB metrics update had issues: {result.stderr}")
+
+    except subprocess.TimeoutExpired:
+        logger.warning("LAB metrics update timed out (>30s)")
+    except Exception as e:
+        logger.error(f"LAB metrics update failed: {e}", exc_info=True)
+        # Don't re-raise - let scheduler continue

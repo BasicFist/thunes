@@ -15,9 +15,13 @@ Usage:
 import argparse
 import signal
 import sys
+import threading
 import time
 
+from flask import Flask, Response
+
 from src.config import ensure_directories
+from src.monitoring import prometheus_metrics
 from src.orchestration.scheduler import TradingScheduler
 from src.utils.logger import setup_logger
 
@@ -25,6 +29,36 @@ from src.utils.logger import setup_logger
 ensure_directories()
 
 logger = setup_logger(__name__)
+
+
+def run_metrics_server(port: int = 8000) -> None:
+    """Run Flask metrics server for Prometheus scraping.
+
+    Args:
+        port: Port to run metrics server on (default: 8000)
+
+    Exposes /metrics endpoint for Prometheus to scrape THUNES trading metrics.
+    Runs in background thread, minimal logging to avoid noise.
+    """
+    app = Flask(__name__)
+
+    @app.route("/metrics")
+    def metrics() -> Response:
+        """Prometheus metrics endpoint."""
+        return Response(prometheus_metrics.metrics_handler(), mimetype="text/plain")
+
+    @app.route("/health")
+    def health() -> dict:
+        """Health check endpoint."""
+        return {"status": "ok", "service": "thunes-metrics"}
+
+    # Run server with minimal logging
+    import logging as flask_logging
+
+    flask_log = flask_logging.getLogger("werkzeug")
+    flask_log.setLevel(flask_logging.ERROR)  # Only show errors
+
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
 def signal_handler(signum: int, frame: object, scheduler: TradingScheduler) -> None:
@@ -118,6 +152,12 @@ Examples:
     else:
         logger.info("Mode: PRODUCTION (foreground)")
 
+    # Start Prometheus metrics server in background
+    logger.info("Starting Prometheus metrics server on port 8000...")
+    metrics_thread = threading.Thread(target=run_metrics_server, args=(8000,), daemon=True)
+    metrics_thread.start()
+    logger.info("Metrics server started: http://0.0.0.0:8000/metrics")
+
     # Initialize scheduler
     logger.info("Initializing scheduler...")
     scheduler = TradingScheduler()
@@ -130,6 +170,7 @@ Examples:
     logger.info("Scheduling jobs...")
     scheduler.schedule_signal_check(interval_minutes=10)
     scheduler.schedule_daily_summary(hour=23, minute=0)
+    scheduler.schedule_lab_metrics_update(interval_seconds=30)  # Update every 30s
 
     # Start scheduler
     scheduler.start()

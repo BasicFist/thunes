@@ -1,0 +1,33 @@
+# Prometheus configuration for THUNES trading system
+# Sprint 2.3 - Phase 13 Observability
+
+global:
+  scrape_interval: 15s      # Scrape metrics every 15 seconds
+  evaluation_interval: 15s  # Evaluate alerting rules every 15 seconds
+  external_labels:
+    environment: 'testnet'
+    system: 'thunes'
+
+# Alertmanager configuration (optional, for Telegram/email alerts)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['localhost:9093']  # Alertmanager port (if configured)
+
+# Load alerting rules from rules.yml
+rule_files:
+  - "rules.yml"
+
+# Scrape configuration
+scrape_configs:
+  # THUNES trading system metrics
+  - job_name: 'thunes'
+    static_configs:
+      - targets: ['host.containers.internal:8000']  # Flask /metrics endpoint (host machine)
+        labels:
+          component: 'trading_system'
+
+  # Optional: Add other scrape targets here
+  # - job_name: 'node_exporter'
+  #   static_configs:
+  #     - targets: ['localhost:9100']

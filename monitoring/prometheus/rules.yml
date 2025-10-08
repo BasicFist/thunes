@@ -1,0 +1,170 @@
+# Prometheus alerting rules for THUNES
+# Sprint 2.3 - Phase 13 Observability
+
+groups:
+  - name: thunes_critical_alerts
+    interval: 30s
+    rules:
+      # Critical: Kill-Switch Active
+      - alert: KillSwitchActive
+        expr: thunes_kill_switch_active == 1
+        for: 5m
+        labels:
+          severity: critical
+          component: risk_management
+        annotations:
+          summary: "THUNES kill-switch activated"
+          description: |
+            Kill-switch has been active for >5 minutes. Daily loss limit exceeded.
+            Current state: {{ $value }}
+            Action required: Review daily PnL, investigate losses, manually deactivate if appropriate.
+
+      # Warning: Circuit Breaker Open
+      - alert: CircuitBreakerOpen
+        expr: thunes_circuit_breaker_state{breaker_name="BinanceAPI"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          component: fault_tolerance
+        annotations:
+          summary: "Circuit breaker open ({{ $labels.breaker_name }})"
+          description: |
+            Circuit breaker {{ $labels.breaker_name }} has been open for >10 minutes.
+            API degradation or repeated failures detected.
+            Action: Check Binance API status, review error logs, verify network connectivity.
+
+      # Warning: WebSocket Disconnected
+      - alert: WebSocketDisconnected
+        expr: thunes_ws_connected == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: data_stream
+        annotations:
+          summary: "WebSocket disconnected ({{ $labels.symbol }})"
+          description: |
+            WebSocket for {{ $labels.symbol }} has been disconnected for >2 minutes.
+            Data stream interrupted, trades may be affected.
+            Action: Check logs for reconnection attempts, verify API keys, monitor for auto-recovery.
+
+      # Warning: High Order Latency
+      - alert: HighOrderLatency
+        expr: histogram_quantile(0.95, rate(thunes_order_latency_ms_bucket[5m])) > 500
+        for: 5m
+        labels:
+          severity: warning
+          component: execution
+        annotations:
+          summary: "High order placement latency (p95 >500ms)"
+          description: |
+            95th percentile order latency exceeds 500ms for >5 minutes.
+            Current p95 latency: {{ $value | humanizeDuration }}
+            Action: Check network conditions, review Binance API status, consider reducing order frequency.
+
+  - name: thunes_risk_alerts
+    interval: 60s
+    rules:
+      # Info: Daily PnL Limit Approaching
+      - alert: DailyPnLLimitApproaching
+        expr: thunes_daily_pnl_used > 0.8
+        for: 5m
+        labels:
+          severity: info
+          component: risk_management
+        annotations:
+          summary: "Daily PnL limit approaching ({{ $value | humanizePercentage }}% used)"
+          description: |
+            Daily PnL usage is >80% of maximum allowed loss.
+            Current usage: {{ $value | humanizePercentage }}%
+            Action: Monitor closely, prepare for potential kill-switch activation.
+
+      # Info: Maximum Positions Reached
+      - alert: MaxPositionsReached
+        expr: thunes_open_positions >= 3
+        for: 2m
+        labels:
+          severity: info
+          component: risk_management
+        annotations:
+          summary: "Maximum position limit reached ({{ $value }})"
+          description: |
+            Open positions: {{ $value }} (max allowed: 3)
+            New BUY orders will be blocked until positions are closed.
+            Action: Monitor position management, consider closing underperforming positions.
+
+  # ============================================================================
+  # Cross-Stack Alerts (TIER 3: LAB + THUNES Integration)
+  # ============================================================================
+
+  - name: cross_stack_alerts
+    interval: 30s
+    rules:
+      # Critical: Trading halted with infrastructure correlation
+      - alert: ThunesBlockedWithMCPFailure
+        expr: thunes_kill_switch_active == 1 and lab_mcp_server_health{server_name="rag-query"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: cross_stack
+        annotations:
+          summary: "THUNES kill-switch active AND RAG server down"
+          description: |
+            Kill-switch activated while RAG MCP server is down.
+            Possible root cause correlation - RAG server failure may have contributed to trading system halt.
+            Action: Investigate MCP server logs, check for infrastructure issues affecting both systems.
+
+      # Warning: Circuit breaker with multiple infrastructure failures
+      - alert: CircuitBreakerWithInfraIssues
+        expr: thunes_circuit_breaker_state{breaker_name="BinanceAPI"} == 1 and count(lab_mcp_server_health == 0) > 3
+        for: 5m
+        labels:
+          severity: warning
+          component: cross_stack
+        annotations:
+          summary: "Circuit breaker OPEN with {{ $value }} MCP failures"
+          description: |
+            API circuit breaker is open while multiple MCP servers are down.
+            Infrastructure degradation may be affecting trading system reliability.
+            Action: Check network connectivity, review MCP health dashboard, investigate infrastructure issues.
+
+      # Warning: Development environment blocked during active trading
+      - alert: WorktreeBlockedDuringTrading
+        expr: lab_worktree_status{worktree_name="thunes"} == 3 and thunes_open_positions > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: cross_stack
+        annotations:
+          summary: "THUNES worktree blocked with {{ $value }} active positions"
+          description: |
+            Development environment in blocked state while trading positions are open.
+            Monitor for potential deployment or configuration issues affecting live trading.
+            Action: Review worktree context, check for ongoing deployments, verify system stability.
+
+      # Warning: Infrastructure degradation
+      - alert: InfrastructureDegradation
+        expr: count(lab_mcp_server_health == 0) >= 5 or count(lab_worktree_test_status == 2) >= 2
+        for: 10m
+        labels:
+          severity: warning
+          component: lab_infrastructure
+        annotations:
+          summary: "LAB infrastructure degradation detected"
+          description: |
+            Multiple MCP servers down ({{ $value }} servers) OR multiple worktrees failing tests.
+            Development and support systems may be impaired.
+            Action: Check MCP health dashboard, review worktree test status, investigate infrastructure issues.
+
+      # Critical: System-wide failure correlation
+      - alert: CriticalSystemsDown
+        expr: (thunes_kill_switch_active == 1 or thunes_circuit_breaker_state{breaker_name="BinanceAPI"} == 1) and count(lab_mcp_server_health == 0) >= 3
+        for: 5m
+        labels:
+          severity: critical
+          component: cross_stack
+        annotations:
+          summary: "CRITICAL: Trading halted AND infrastructure failing"
+          description: |
+            Trading system in fault state (kill-switch or circuit breaker) with {{ $value }} MCP servers down.
+            System-wide infrastructure failure detected - immediate investigation required.
+            Action: Escalate to ops team, check for network/host issues, review all system logs.
