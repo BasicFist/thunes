@@ -4,9 +4,16 @@ A quantitative cryptocurrency trading system implementing micro-transaction stra
 
 ## 🎯 Project Status
 
-**Phase**: MVP Development
+**Phase**: Phase 13 - Binance Spot Testnet Deployment (Ready for Configuration + DR Drill)
 **Environment**: Binance Spot Testnet
 **Strategy**: SMA Crossover (baseline)
+**Readiness**: 51% current → 72% post-drill → 81% post-rodage
+**Test Coverage**: 203/225 tests passing (90.2%)
+
+### 🚀 **Quick Links**
+- **[START-HERE.md](START-HERE.md)** ⭐ - Complete Phase 13 deployment guide (2.5-3 hours to deployment authorization)
+- **[docs/README.md](docs/README.md)** - Master documentation index (~78 files)
+- **[CLAUDE.md](CLAUDE.md)** - AI development guidelines
 
 ## 🏗️ Architecture
 
@@ -97,14 +104,14 @@ make paper
 | 4 | Optimization | ✅ | Optuna study completed, best params identified |
 | 5 | Paper Trading | ✅ | Market orders executed on testnet |
 | 6 | Order Filters | ✅ | Tick/step/minNotional validation, no -1013 errors |
-| 7 | WebSocket Streaming | 🚧 | Real-time bookTicker/aggTrade, reconnection logic |
-| 8 | Risk Management | 🚧 | Kill-switch, max loss limits, cool-down |
-| 9 | Alerts | 🚧 | Telegram notifications for trades/errors/PNL |
-| 10 | Orchestration | 🚧 | APScheduler jobs, anti-overlap |
-| 11 | Observability | 🚧 | Prometheus metrics, structured logs |
-| 12 | CI/CD | ✅ | GitHub workflows, secrets management |
-| 13 | Paper 24/7 | ⏳ | 7-day rodage without critical incidents |
-| 14 | Micro-Live | ⏳ | 10-50€ live with strict limits |
+| 7 | WebSocket Streaming | ✅ | Real-time bookTicker/aggTrade, reconnection logic |
+| 8 | Risk Management | ✅ | Kill-switch, max loss limits, cool-down, audit trail |
+| 9 | Alerts | ✅ | Telegram notifications for trades/errors/kill-switch |
+| 10 | Orchestration | ✅ | APScheduler jobs, anti-overlap, monitoring |
+| 11 | Observability | 🚧 | Prometheus metrics prepared, deployment pending |
+| 12 | CI/CD | ✅ | GitHub workflows, quality gates enforced |
+| 13 | Paper 24/7 | 🚧 | Code complete, ready for configuration + DR drill |
+| 14 | Micro-Live | ⏳ | Pending Phase 13 completion (7-day rodage) |
 
 **Legend**: ✅ Complete | 🚧 In Progress | ⏳ Pending
 

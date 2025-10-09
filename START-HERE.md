@@ -9,8 +9,8 @@
 ## ⚡ Quick Navigation
 
 **If you have 2 minutes** → Read this page
-**If you have 10 minutes** → Read `SESSION-AUDIT-2025-10-09.md`
-**If you have 30 minutes** → Read `PHASE-13-COMPLETE-STATUS.md`
+**If you have 10 minutes** → Read `docs/archive/2025-10-09/SESSION-AUDIT.md`
+**If you have 30 minutes** → Read `docs/phase-13/PHASE-13-COMPLETE-STATUS.md`
 **If you're ready to execute** → Run `python scripts/setup_testnet_credentials.py`
 
 ---
@@ -73,8 +73,8 @@
 
 **Read in This Order**:
 1. This document (you're here)
-2. `SESSION-AUDIT-2025-10-09.md` - Quality audit findings
-3. `PHASE-13-COMPLETE-STATUS.md` - Complete status
+2. `docs/archive/2025-10-09/SESSION-AUDIT.md` - Quality audit findings
+3. `docs/phase-13/PHASE-13-COMPLETE-STATUS.md` - Complete status
 
 **Key Takeaway**: Work is comprehensive, functional, and deployment-ready. Word count metrics were corrected (were overestimated 3×), but quality unchanged.
 
@@ -96,7 +96,7 @@ python scripts/setup_testnet_credentials.py
 - Auto-verification with clear feedback
 
 **Option B: Manual Setup**:
-Follow `CONFIGURATION_WORKFLOW.md` for step-by-step manual configuration.
+Follow `docs/phase-13/CONFIGURATION_WORKFLOW.md` for step-by-step manual configuration.
 
 ---
 
@@ -108,13 +108,13 @@ bash scripts/dr_drill_preflight.sh
 
 **Expected Output**: `✅ PRE-FLIGHT CHECK PASSED (7/7)`
 
-**If Failed**: See `CONFIGURATION_GUIDE.md` troubleshooting section
+**If Failed**: See `docs/phase-13/CONFIGURATION_GUIDE.md` troubleshooting section
 
 ---
 
 ### Step 4: DR Drill Execution (2 hours)
 
-**Quick Reference**: `DR_DRILL_QUICKSTART.md`
+**Quick Reference**: `docs/phase-13/DR_DRILL_QUICKSTART.md`
 **Detailed Procedures**: `scripts/disaster_recovery_drill.md`
 
 **4 Tests**:
@@ -131,7 +131,7 @@ bash scripts/dr_drill_preflight.sh
 
 ```bash
 # Follow T-minus countdown
-cat docs/PHASE-13-DEPLOYMENT-RUNBOOK.md
+cat docs/phase-13/PHASE-13-DEPLOYMENT-RUNBOOK.md
 
 # Post-deployment verification
 bash scripts/post_deployment_verification.sh
@@ -143,7 +143,7 @@ bash scripts/post_deployment_verification.sh
 
 ### Step 6: 7-Day Rodage (Twice Daily)
 
-Follow `docs/PHASE-13-DEPLOYMENT-CHECKLIST.md` Section L-M:
+Follow `docs/phase-13/PHASE-13-DEPLOYMENT-CHECKLIST.md` Section L-M:
 - Morning check (9 AM)
 - Evening check (6 PM)
 - Track Tier 1/2/3 metrics
@@ -186,7 +186,7 @@ Follow `docs/PHASE-13-DEPLOYMENT-CHECKLIST.md` Section L-M:
 
 ### Audit Documentation
 
-**Complete Report**: `SESSION-AUDIT-2025-10-09.md` (638 lines)
+**Complete Report**: `docs/archive/2025-10-09/SESSION-AUDIT.md` (638 lines)
 
 **Contains**:
 - Detailed findings with evidence
@@ -260,7 +260,7 @@ Overall Readiness:   81% ██████████████████�
 ### Configuration Issues
 
 **Problem**: Telegram bot not responding
-**Solution**: See `CONFIGURATION_GUIDE.md` → "Telegram Bot Not Responding"
+**Solution**: See `docs/phase-13/CONFIGURATION_GUIDE.md` → "Telegram Bot Not Responding"
 
 **Problem**: Binance API key invalid
 **Solution**: Verify using testnet.binance.vision keys, not mainnet
@@ -287,26 +287,26 @@ python scripts/validate_risk_config.py
 
 ### Entry Points (Start Here)
 1. ⭐ **START-HERE.md** (this document)
-2. 🔍 **SESSION-AUDIT-2025-10-09.md** (quality audit)
-3. 📋 **PHASE-13-COMPLETE-STATUS.md** (authoritative status)
+2. 🔍 **docs/archive/2025-10-09/SESSION-AUDIT.md** (quality audit)
+3. 📋 **docs/phase-13/PHASE-13-COMPLETE-STATUS.md** (authoritative status)
 
 ### Quickstart Guides (5-15 min)
-4. **DR_DRILL_QUICKSTART.md** (1 page)
+4. **docs/phase-13/DR_DRILL_QUICKSTART.md** (1 page)
 5. **docs/TESTNET-SETUP-QUICKSTART.md** (5 min)
-6. **LAUNCH_READINESS_2025-10-07.md** (system status)
+6. **docs/phase-13/LAUNCH_READINESS_2025-10-07.md** (system status)
 
 ### Comprehensive Guides (30+ min)
-7. **docs/PHASE-13-PRE-DEPLOYMENT-AUDIT-2025-10-09.md** (original audit)
-8. **docs/PHASE-13-DEPLOYMENT-CHECKLIST.md** (16 sections)
-9. **docs/PHASE-13-DEPLOYMENT-RUNBOOK.md** (T-minus countdown)
-10. **docs/DR-DRILL-EXECUTION-GUIDE.md** (30 pages)
-11. **CONFIGURATION_WORKFLOW.md** (40+ pages)
+7. **docs/phase-13/PHASE-13-PRE-DEPLOYMENT-AUDIT-2025-10-09.md** (original audit)
+8. **docs/phase-13/PHASE-13-DEPLOYMENT-CHECKLIST.md** (16 sections)
+9. **docs/phase-13/PHASE-13-DEPLOYMENT-RUNBOOK.md** (T-minus countdown)
+10. **docs/phase-13/DR-DRILL-EXECUTION-GUIDE.md** (30 pages)
+11. **docs/phase-13/CONFIGURATION_WORKFLOW.md** (40+ pages)
 
 ### Reference Guides
-12. **CONFIGURATION_GUIDE.md** (troubleshooting)
-13. **SESSION_SUMMARY_2025-10-09.md** (session log)
-14. **docs/SECURITY-VALIDATION-2025-10-09.md** (security checks)
-15. **DEPLOYMENT_READINESS_STATUS.md** (readiness assessment)
+12. **docs/phase-13/CONFIGURATION_GUIDE.md** (troubleshooting)
+13. **docs/archive/2025-10-09/SESSION-SUMMARY.md** (session log)
+14. **docs/phase-13/SECURITY-VALIDATION-2025-10-09.md** (security checks)
+15. **docs/phase-13/DEPLOYMENT_READINESS_STATUS.md** (readiness assessment)
 
 ### Automation Scripts
 16. **scripts/setup_testnet_credentials.py** (interactive config)

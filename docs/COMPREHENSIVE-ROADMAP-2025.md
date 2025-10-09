@@ -2438,7 +2438,7 @@ jobs:
       - name: Deploy to production
         run: |
           # Deployment script (SSH to server, pull image, restart services)
-          ./scripts/deploy.sh
+          ./bin/deploy.sh
 ```
 
 ---

@@ -25,24 +25,24 @@ THUNES is a quantitative cryptocurrency trading system with micro-transaction st
 
 **Key Documents** (Start Here):
 - 🚀 `START-HERE.md` - **ULTIMATE ENTRY POINT** (read this first) ⭐⭐⭐
-- 🔍 `SESSION-AUDIT-2025-10-09.md` - Comprehensive quality audit (B+ grade)
-- 📋 `PHASE-13-COMPLETE-STATUS.md` - Complete status & metrics
-- 📖 `DR_DRILL_QUICKSTART.md` - 1-page DR overview
+- 🔍 `docs/archive/2025-10-09/SESSION-AUDIT.md` - Comprehensive quality audit (B+ grade)
+- 📋 `docs/phase-13/PHASE-13-COMPLETE-STATUS.md` - Complete status & metrics
+- 📖 `docs/phase-13/DR_DRILL_QUICKSTART.md` - 1-page DR overview
 - ⚙️ `docs/TESTNET-SETUP-QUICKSTART.md` - 5-minute setup guide
 
 **Next Steps** (see START-HERE.md for details):
 1. **Read** (2 min): `START-HERE.md`
-2. **Understand** (10 min): `SESSION-AUDIT-2025-10-09.md`
+2. **Understand** (10 min): `docs/archive/2025-10-09/SESSION-AUDIT.md`
 3. **Configure** (30-40 min): `python scripts/setup_testnet_credentials.py`
 4. **Pre-flight** (5 min): `bash scripts/dr_drill_preflight.sh`
 5. **DR Drill** (2 hours): Follow `scripts/disaster_recovery_drill.md`
-6. **Deploy** (30 min, next day): Follow `docs/PHASE-13-DEPLOYMENT-RUNBOOK.md`
+6. **Deploy** (30 min, next day): Follow `docs/phase-13/PHASE-13-DEPLOYMENT-RUNBOOK.md`
 7. **Rodage** (7 days): Twice-daily monitoring
 
 **Timeline to Production**: 8-9 days from configuration start
 
 **Automation**: 28 automated validation checks, 80% deployment automation
-**Audit Grade**: B+ (85/100) - See SESSION-AUDIT-2025-10-09.md for details
+**Audit Grade**: B+ (85/100) - See docs/archive/2025-10-09/SESSION-AUDIT.md for details
 
 ---
 
@@ -409,8 +409,8 @@ See `docs/OPERATIONAL-RUNBOOK.md` for disaster recovery.
     * Configuration system (interactive + manual + 19 validation checks)
     * Launch readiness integration (Oct 7 work: 9 files, 23,000 words)
   - 🔑 **Key Documents**:
-    * `PHASE-13-COMPLETE-STATUS.md` - Single authoritative status (8,700 words)
-    * `DR_DRILL_QUICKSTART.md` - 1-page quick reference
+    * `docs/phase-13/PHASE-13-COMPLETE-STATUS.md` - Single authoritative status
+    * `docs/phase-13/DR_DRILL_QUICKSTART.md` - 1-page quick reference
     * `scripts/setup_testnet_credentials.py` - Interactive configuration (recommended)
     * `scripts/dr_drill_preflight.sh` - 8 pre-flight checks (5 min)
   - 🚀 **Next Steps**: Configure (30-40 min) → DR drill (2 hours) → Deploy (30 min) → Rodage (7 days)

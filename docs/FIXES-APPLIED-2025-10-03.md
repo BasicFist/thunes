@@ -211,12 +211,12 @@ Skipped (intentional):
 
 2. (Optional but recommended) Set up Telegram bot:
    ```bash
-   ./scripts/setup_telegram.sh
+   ./bin/setup_telegram.sh
    ```
 
 3. Run final validation:
    ```bash
-   ./scripts/pre_deployment_validation.sh
+   ./bin/pre_deployment_validation.sh
    ```
 
 4. Deploy Phase 13:
@@ -279,7 +279,7 @@ All scripts preserve .env security:
 ### Immediate (Today):
 1. User configures Binance testnet API keys
 2. User sets up Telegram bot (optional but recommended)
-3. Run: `./scripts/pre_deployment_validation.sh`
+3. Run: `./bin/pre_deployment_validation.sh`
 4. Verify all checks pass
 
 ### Phase 13 Deployment (When Ready):

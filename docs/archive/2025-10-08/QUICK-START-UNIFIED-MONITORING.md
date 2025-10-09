@@ -235,7 +235,7 @@ echo $?  # Should be 0
 ls -la ~/LAB/worktrees/*/.worktree
 
 # Initialize if missing
-~/LAB/scripts/worktree-context.sh init ~/LAB/worktrees/dev
+~/LAB/bin/worktree-context.sh init ~/LAB/worktrees/dev
 ```
 
 ### Issue: Dashboard Not Loading
@@ -286,13 +286,13 @@ Auto-sync THUNES Prometheus metrics to worktree context every 5 minutes:
 crontab -e
 
 # Add this line:
-*/5 * * * * ~/LAB/scripts/thunes-metrics-to-worktree.sh >> ~/LAB/logs/thunes-metrics-sync.log 2>&1
+*/5 * * * * ~/LAB/bin/thunes-metrics-to-worktree.sh >> ~/LAB/logs/thunes-metrics-sync.log 2>&1
 
 # Verify cron job
 crontab -l | grep thunes-metrics
 
 # Test manually
-~/LAB/scripts/thunes-metrics-to-worktree.sh
+~/LAB/bin/thunes-metrics-to-worktree.sh
 ```
 
 **What it does**:

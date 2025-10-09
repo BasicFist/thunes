@@ -8,7 +8,7 @@ THUNES uses Telegram for critical alerts and daily summaries. This guide walks y
 
 ```bash
 # Run automated setup script
-./scripts/setup_telegram.sh
+./bin/setup_telegram.sh
 
 # Or verify existing configuration
 python scripts/verify_telegram.py
