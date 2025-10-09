@@ -24,19 +24,22 @@ THUNES is a quantitative cryptocurrency trading system with micro-transaction st
 **Deployment Readiness**: 51% → 72% (after config + drill) → 81% (after rodage)
 
 **Key Documents** (Start Here):
-- `SESSION-AUDIT-2025-10-09.md` - Comprehensive quality audit ⭐
-- `PHASE-13-COMPLETE-STATUS.md` - Single authoritative status document
-- `DR_DRILL_QUICKSTART.md` - 1-page overview of next steps
-- `docs/TESTNET-SETUP-QUICKSTART.md` - 5-minute setup guide
-- `CONFIGURATION_WORKFLOW.md` - Step-by-step configuration
+- 🚀 `START-HERE.md` - **ULTIMATE ENTRY POINT** (read this first) ⭐⭐⭐
+- 🔍 `SESSION-AUDIT-2025-10-09.md` - Comprehensive quality audit (B+ grade)
+- 📋 `PHASE-13-COMPLETE-STATUS.md` - Complete status & metrics
+- 📖 `DR_DRILL_QUICKSTART.md` - 1-page DR overview
+- ⚙️ `docs/TESTNET-SETUP-QUICKSTART.md` - 5-minute setup guide
 
-**Next Steps**:
-1. **Review Audit** (10 min): Read `SESSION-AUDIT-2025-10-09.md`
-2. **Configure** (30-40 min): `python scripts/setup_testnet_credentials.py`
-3. **Pre-flight** (5 min): `bash scripts/dr_drill_preflight.sh`
-4. **DR Drill** (2 hours): Follow `scripts/disaster_recovery_drill.md`
-5. **Deploy** (30 min): Follow `docs/PHASE-13-DEPLOYMENT-RUNBOOK.md`
-6. **Rodage** (7 days): Twice-daily monitoring
+**Next Steps** (see START-HERE.md for details):
+1. **Read** (2 min): `START-HERE.md`
+2. **Understand** (10 min): `SESSION-AUDIT-2025-10-09.md`
+3. **Configure** (30-40 min): `python scripts/setup_testnet_credentials.py`
+4. **Pre-flight** (5 min): `bash scripts/dr_drill_preflight.sh`
+5. **DR Drill** (2 hours): Follow `scripts/disaster_recovery_drill.md`
+6. **Deploy** (30 min, next day): Follow `docs/PHASE-13-DEPLOYMENT-RUNBOOK.md`
+7. **Rodage** (7 days): Twice-daily monitoring
+
+**Timeline to Production**: 8-9 days from configuration start
 
 **Automation**: 28 automated validation checks, 80% deployment automation
 **Audit Grade**: B+ (85/100) - See SESSION-AUDIT-2025-10-09.md for details
