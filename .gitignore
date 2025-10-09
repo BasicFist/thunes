@@ -74,3 +74,8 @@ Thumbs.db
 secrets/
 *.pem
 *.key
+
+# Local data & databases
+data/
+*.db
+*.db.bak
