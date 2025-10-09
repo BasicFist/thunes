@@ -1,8 +1,28 @@
 # THUNES Documentation Index
 
-**Purpose**: Master navigation hub for all project documentation (~70 files)
+**Purpose**: Master navigation hub for all project documentation (~78 files)
 
 **Last Updated**: 2025-10-09
+
+---
+
+## ⚡ Quick Reference Card
+
+**I need to...**
+
+| Task | Go Here | Time |
+|------|---------|------|
+| **Deploy Phase 13 to testnet** | [../START-HERE.md](../START-HERE.md) | 2.5-3h |
+| **Configure credentials** | [phase-13/CONFIGURATION_WORKFLOW.md](phase-13/CONFIGURATION_WORKFLOW.md) | 30-40min |
+| **Run DR drill** | [phase-13/DR_DRILL_QUICKSTART.md](phase-13/DR_DRILL_QUICKSTART.md) | 2h |
+| **Troubleshoot issues** | [phase-13/CONFIGURATION_GUIDE.md](phase-13/CONFIGURATION_GUIDE.md) | Variable |
+| **Understand architecture** | [../CLAUDE.md](../CLAUDE.md) | 15-30min |
+| **Contribute code** | [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) | 10min |
+| **Research ML strategies** | [research/REGULATORY-ML-LANDSCAPE-2025.md](research/REGULATORY-ML-LANDSCAPE-2025.md) | 30-60min |
+| **View version history** | [../CHANGELOG.md](../CHANGELOG.md) | 10min |
+| **Find specific documentation** | Use Quick Navigation below ↓ | <1min |
+
+---
 
 **Quick Navigation**:
 - [📍 Entry Points](#-entry-points-start-here) - Where to start
