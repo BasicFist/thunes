@@ -8,6 +8,9 @@ name: CI
 # - Pytest (205+/228 tests passing)
 # This prevents the documentation drift that allowed broken tests to reach main.
 
+permissions:
+  contents: read  # Default read-only (elevated permissions granted per-job)
+
 on:
   push:
     branches: [main, develop]
@@ -22,6 +25,9 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read  # Checkout code
+      pull-requests: write  # Codecov PR comments
     strategy:
       matrix:
         python-version: ["3.12"]

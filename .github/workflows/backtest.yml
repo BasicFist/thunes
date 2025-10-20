@@ -1,5 +1,8 @@
 name: Backtest
 
+permissions:
+  contents: read  # Default read-only (elevated permissions granted per-job)
+
 on:
   workflow_dispatch:  # Manual trigger
     inputs:
@@ -27,6 +30,10 @@ jobs:
   backtest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: testnet  # Require approval for testnet API access
+    permissions:
+      contents: read  # Checkout code
+      actions: write  # Upload artifacts
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
