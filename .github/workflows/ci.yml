@@ -28,6 +28,7 @@ jobs:
     permissions:
       contents: read  # Checkout code
       pull-requests: write  # Codecov PR comments
+      actions: write  # Enable pip cache save/restore
     strategy:
       matrix:
         python-version: ["3.12"]
