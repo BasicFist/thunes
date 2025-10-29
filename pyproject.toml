@@ -113,6 +113,7 @@ addopts = [
 markers = [
     "asyncio: mark test as async (requires pytest-asyncio)",
     "slow: mark test as slow (>5 seconds runtime)",
+    "integration_creds: mark tests that require live exchange credentials",
 ]
 asyncio_mode = "auto"
 filterwarnings = [

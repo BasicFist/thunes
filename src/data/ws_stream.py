@@ -191,7 +191,8 @@ class BinanceWebSocketStream:
         except ImportError:  # pragma: no cover - stdlib always available
             MagicMock = None  # type: ignore
 
-        if os.getenv("PYTEST_CURRENT_TEST"):
+        allow_online = os.getenv("BINANCE_WS_ALLOW_ONLINE_TESTS")
+        if os.getenv("PYTEST_CURRENT_TEST") and not allow_online:
             if MagicMock is not None and isinstance(ThreadedWebsocketManager, MagicMock):
                 logger.info(
                     "Pytest detected but ThreadedWebsocketManager mocked - keeping online initialization for behavior tests"
