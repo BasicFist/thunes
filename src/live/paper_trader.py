@@ -10,14 +10,14 @@ from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
 from src.alerts.telegram import TelegramBot
-from src.backtest.rsi_strategy import RSIStrategy
-from src.backtest.strategy import SMAStrategy
 from src.config import ARTIFACTS_DIR, settings
 from src.data.binance_client import BinanceDataClient
 from src.filters.exchange_filters import ExchangeFilters
 from src.models.position import PositionTracker
 from src.monitoring.performance_tracker import PerformanceTracker
 from src.risk.manager import RiskManager
+from src.strategies import strategy_registry
+from src.strategies.loader import ensure_strategies_loaded
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__, log_file="paper_trader.log")
@@ -58,6 +58,9 @@ class PaperTrader:
         self.enable_risk_manager = enable_risk_manager
         self.enable_performance_tracking = enable_performance_tracking
         self.enable_telegram = enable_telegram
+
+        # Ensure built-in strategies are registered before use
+        ensure_strategies_loaded()
 
         # Initialize clients
         if testnet:
@@ -165,6 +168,47 @@ class PaperTrader:
 
         return False
 
+    def _build_strategy_kwargs(
+        self,
+        strategy_type: str,
+        timeframe: str,
+        params: dict[str, Any],
+        *,
+        fast_override: int | None = None,
+        slow_override: int | None = None,
+    ) -> dict[str, Any]:
+        """Translate stored parameters into strategy constructor kwargs."""
+        key = strategy_type.lower()
+        if key in ("sma", "simple_moving_average"):
+            fast = fast_override or params.get("fast_window", 20)
+            slow = slow_override or params.get("slow_window", 50)
+            return {"fast_window": fast, "slow_window": slow, "freq": timeframe}
+
+        if key in ("rsi", "rsi_mean_reversion"):
+            return {
+                "rsi_period": params.get("rsi_period", 14),
+                "oversold_threshold": params.get("oversold", 30.0),
+                "overbought_threshold": params.get("overbought", 70.0),
+                "stop_loss_pct": params.get("stop_loss", 3.0),
+                "freq": timeframe,
+            }
+
+        if key in ("sentiment_lm", "llm_sentiment"):
+            return {
+                "model_id": params.get(
+                    "model_id", "distilbert-base-uncased-finetuned-sst-2-english"
+                ),
+                "lookback": params.get("lookback", 24),
+                "bullish_threshold": params.get("bullish_threshold", 0.65),
+                "bearish_threshold": params.get("bearish_threshold", 0.35),
+                "freq": timeframe,
+            }
+
+        # Fallback passes raw parameters; strategy implementation decides defaults.
+        strategy_params = {**params}
+        strategy_params.setdefault("freq", timeframe)
+        return strategy_params
+
     def get_account_balance(self, asset: str = "USDT") -> float:
         """
         Get account balance for specified asset.
@@ -260,18 +304,31 @@ class PaperTrader:
         if not self.current_params:
             self.current_params = self.load_parameters()
 
-        # Extract strategy type and parameters
-        strategy_type = self.current_params.get("strategy", "RSI")
-        params = self.current_params.get("parameters", {})
+        symbol_config = self.current_params.get(symbol)
+        if isinstance(symbol_config, dict):
+            strategy_type = symbol_config.get("strategy", "RSI")
+            params = symbol_config.get("parameters", {})
+            logger.info("Loaded %s strategy for %s from multi-symbol config", strategy_type, symbol)
+        else:
+            strategy_type = self.current_params.get("strategy", "RSI")
+            params = self.current_params.get("parameters", {})
+            logger.info("Using legacy parameter format: %s", strategy_type)
+
+        if not params:
+            logger.warning("No parameters found for %s, falling back to defaults", symbol)
 
         # Fetch recent data
-        if strategy_type == "SMA":
-            fast = fast_window or params.get("fast_window", 20)
+        strategy_key = strategy_type.lower()
+        if strategy_key in ("sma", "simple_moving_average"):
             slow = slow_window or params.get("slow_window", 50)
             limit = max(slow + 10, 100)
-        else:  # RSI
+        elif strategy_key in ("rsi", "rsi_mean_reversion"):
             rsi_period = params.get("rsi_period", 14)
             limit = max(rsi_period + 50, 100)
+        elif strategy_key in ("sentiment_lm", "llm_sentiment"):
+            limit = params.get("lookback", 24) + 10
+        else:
+            limit = params.get("lookback_limit", 200)
 
         df = self.data_client.get_historical_klines(
             symbol=symbol,
@@ -279,26 +336,24 @@ class PaperTrader:
             limit=limit,
         )
 
-        # Generate signals based on strategy type
-        if strategy_type == "SMA":
-            fast = fast_window or params.get("fast_window", 20)
-            slow = slow_window or params.get("slow_window", 50)
-            strategy = SMAStrategy(fast_window=fast, slow_window=slow)
-            entries, exits = strategy.generate_signals(df)
-            logger.info(f"Using SMA strategy: fast={fast}, slow={slow}")
-        else:  # RSI (default from weekly re-opt)
-            rsi_strategy = RSIStrategy(
-                rsi_period=params.get("rsi_period", 14),
-                oversold_threshold=params.get("oversold", 30.0),
-                overbought_threshold=params.get("overbought", 70.0),
-                stop_loss_pct=params.get("stop_loss", 3.0),
-            )
-            entries, exits = rsi_strategy.generate_signals(df)
-            logger.info(
-                f"Using RSI strategy: period={params.get('rsi_period', 14)}, "
-                f"oversold={params.get('oversold', 30.0)}, "
-                f"overbought={params.get('overbought', 70.0)}"
-            )
+        strategy_kwargs = self._build_strategy_kwargs(
+            strategy_type=strategy_type,
+            timeframe=timeframe,
+            params=params,
+            fast_override=fast_window,
+            slow_override=slow_window,
+        )
+
+        try:
+            strategy = strategy_registry.create(strategy_type, **strategy_kwargs)
+        except KeyError as exc:
+            available = ", ".join(strategy_registry.available())
+            raise ValueError(
+                f"Strategy '{strategy_type}' not registered. Available: {available}"
+            ) from exc
+
+        entries, exits = strategy.generate_signals(df)
+        logger.info("Using strategy %s with params %s", strategy.metadata.name, strategy.parameters)
 
         # Check latest signal
         latest_entry = entries.iloc[-1]

@@ -2,10 +2,10 @@
 
 import argparse
 
-from src.backtest.rsi_strategy import RSIStrategy
-from src.backtest.strategy import SMAStrategy
 from src.config import ARTIFACTS_DIR, ensure_directories
 from src.data.binance_client import BinanceDataClient
+from src.strategies import strategy_registry
+from src.strategies.loader import ensure_strategies_loaded
 from src.utils.logger import setup_logger
 
 # Ensure required directories exist (entrypoint responsibility)
@@ -45,6 +45,7 @@ def run_backtest(
         overbought: RSI overbought threshold (RSI strategy)
         stop_loss: Stop-loss percentage (RSI strategy)
     """
+    ensure_strategies_loaded()
     logger.info(f"Starting backtest for {symbol} on {timeframe} timeframe")
     logger.info(f"Strategy: {strategy_type.upper()}")
 
@@ -64,20 +65,31 @@ def run_backtest(
 
     logger.info(f"Data fetched: {len(df)} candles from {df.index[0]} to {df.index[-1]}")
 
-    # Select and run strategy
-    if strategy_type.lower() == "sma":
-        strategy = SMAStrategy(fast_window=fast_window, slow_window=slow_window)
-        strategy_name = f"SMA_{fast_window}_{slow_window}"
-    elif strategy_type.lower() == "rsi":
-        strategy = RSIStrategy(
-            rsi_period=rsi_period,
-            oversold_threshold=oversold,
-            overbought_threshold=overbought,
-            stop_loss_pct=stop_loss,
-        )
-        strategy_name = f"RSI_{rsi_period}_{int(oversold)}_{int(overbought)}"
+    strategy_key = strategy_type.lower()
+    if strategy_key in ("sma", "simple_moving_average"):
+        strategy_kwargs = {
+            "fast_window": fast_window,
+            "slow_window": slow_window,
+            "freq": timeframe,
+        }
+    elif strategy_key in ("rsi", "rsi_mean_reversion"):
+        strategy_kwargs = {
+            "rsi_period": rsi_period,
+            "oversold_threshold": oversold,
+            "overbought_threshold": overbought,
+            "stop_loss_pct": stop_loss,
+            "freq": timeframe,
+        }
     else:
-        raise ValueError(f"Unknown strategy type: {strategy_type}. Use 'sma' or 'rsi'.")
+        strategy_kwargs = {"freq": timeframe}
+
+    try:
+        strategy = strategy_registry.create(strategy_type, **strategy_kwargs)
+    except KeyError as exc:
+        available = ", ".join(strategy_registry.available())
+        raise ValueError(f"Unknown strategy '{strategy_type}'. Available: {available}") from exc
+
+    strategy_name = strategy.metadata.name.upper()
 
     portfolio = strategy.backtest(df, initial_capital=initial_capital)
 
@@ -91,7 +103,7 @@ def run_backtest(
 
     # Print key metrics
     print("\n" + "=" * 60)
-    print(f"Backtest Results: {symbol} ({timeframe}) - {strategy_type.upper()}")
+    print(f"Backtest Results: {symbol} ({timeframe}) - {strategy_name}")
     print("=" * 60)
     print(f"Total Return: {stats['Total Return [%]']:.2f}%")
     print(f"Sharpe Ratio: {stats.get('Sharpe Ratio', 0.0):.2f}")
@@ -103,6 +115,8 @@ def run_backtest(
 
 def main() -> None:
     """CLI entry point."""
+    ensure_strategies_loaded()
+    available_strategies = strategy_registry.available()
     parser = argparse.ArgumentParser(description="Run backtest for crypto trading strategy")
     parser.add_argument("--symbol", type=str, default="BTCUSDT", help="Trading pair symbol")
     parser.add_argument("--timeframe", type=str, default="1h", help="Candlestick timeframe")
@@ -112,8 +126,8 @@ def main() -> None:
         "--strategy",
         type=str,
         default="rsi",
-        choices=["sma", "rsi"],
-        help="Strategy to use (default: rsi)",
+        choices=available_strategies,
+        help=f"Strategy to use (default: rsi). Available: {', '.join(available_strategies)}",
     )
 
     # SMA parameters

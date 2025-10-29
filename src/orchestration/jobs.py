@@ -14,6 +14,7 @@ Design Pattern:
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from src.optimize.auto_reopt import WeeklyReoptimizer
 from src.utils.circuit_breaker import circuit_monitor
 from src.utils.logger import setup_logger
 
@@ -198,6 +199,42 @@ def update_lab_infrastructure_metrics() -> None:
 
     except subprocess.TimeoutExpired:
         logger.warning("LAB metrics update timed out (>30s)")
-    except Exception as e:
-        logger.error(f"LAB metrics update failed: {e}", exc_info=True)
+
+
+def run_weekly_reoptimization(
+    symbol: str,
+    timeframe: str,
+    strategy: str,
+    lookback_days: int = 30,
+    n_trials: int = 25,
+    params_filename: str = "current_parameters.json",
+) -> None:
+    """Run weekly re-optimization for the specified strategy."""
+
+    try:
+        reoptimizer = WeeklyReoptimizer(
+            symbol=symbol,
+            timeframe=timeframe,
+            lookback_days=lookback_days,
+            n_trials=n_trials,
+            strategy=strategy,
+            params_filename=params_filename,
+        )
+
+        if not reoptimizer.should_reoptimize():
+            logger.info("Re-optimization skipped (fresh parameters for %s)", strategy)
+            return
+
+        results = reoptimizer.run()
+        params = results.get("parameters") or results.get("best_params")
+        sharpe = results.get("sharpe_ratio") or results.get("best_value")
+        logger.info(
+            "Re-optimization complete: strategy=%s sharpe=%.3f params=%s",
+            reoptimizer.metadata.name,
+            sharpe or 0.0,
+            params,
+        )
+
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Weekly re-optimization failed: %s", exc, exc_info=True)
         # Don't re-raise - let scheduler continue
