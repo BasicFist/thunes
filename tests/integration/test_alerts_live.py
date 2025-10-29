@@ -12,13 +12,16 @@ from src.config import settings
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration_creds]
 
+if os.getenv("TELEGRAM_TESTS_ENABLE") != "1":  # pragma: no cover - opt-in
+    pytest.skip(
+        "Set TELEGRAM_TESTS_ENABLE=1 to run Telegram integration smoke",
+        allow_module_level=True,
+    )
+
 
 @pytest.mark.integration_creds
 def test_telegram_alert_delivery() -> None:
     """Send a short Telegram message when integration testing is enabled."""
-    if os.getenv("TELEGRAM_TESTS_ENABLE") != "1":
-        pytest.skip("Set TELEGRAM_TESTS_ENABLE=1 to run Telegram integration smoke")
-
     if not (settings.telegram_bot_token and settings.telegram_chat_id):
         pytest.skip("Telegram credentials not configured")
 

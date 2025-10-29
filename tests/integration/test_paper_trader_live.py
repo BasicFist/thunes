@@ -12,6 +12,12 @@ from src.live.paper_trader import PaperTrader
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration_creds]
 
+if os.getenv("BINANCE_PAPER_TESTS_ENABLE") != "1":  # pragma: no cover - opt-in
+    pytest.skip(
+        "Set BINANCE_PAPER_TESTS_ENABLE=1 to run PaperTrader integration smokes",
+        allow_module_level=True,
+    )
+
 
 def _has_trading_creds() -> bool:
     """Return True if Binance testnet or live credentials are configured."""
@@ -24,8 +30,6 @@ def _has_trading_creds() -> bool:
 @pytest.mark.integration_creds
 def test_paper_trader_rest_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate REST interactions (balance + price fallback) against live API."""
-    if os.getenv("BINANCE_PAPER_TESTS_ENABLE") != "1":
-        pytest.skip("Set BINANCE_PAPER_TESTS_ENABLE=1 to run PaperTrader integration smoke")
     if not _has_trading_creds():
         pytest.skip("Binance credentials not configured")
 
@@ -59,8 +63,6 @@ def test_paper_trader_rest_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.integration_creds
 def test_paper_trader_strategy_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """Smoke run the strategy loop without executing orders."""
-    if os.getenv("BINANCE_PAPER_TESTS_ENABLE") != "1":
-        pytest.skip("Set BINANCE_PAPER_TESTS_ENABLE=1 to run PaperTrader integration smoke")
     if not _has_trading_creds():
         pytest.skip("Binance credentials not configured")
 

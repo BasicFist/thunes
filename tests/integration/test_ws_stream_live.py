@@ -19,6 +19,12 @@ from src.data.ws_stream import BinanceWebSocketStream
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration_creds]
 
+if os.getenv("BINANCE_WS_TESTS_ENABLE") != "1":  # pragma: no cover - opt-in harness
+    pytest.skip(
+        "Set BINANCE_WS_TESTS_ENABLE=1 to run live WebSocket tests",
+        allow_module_level=True,
+    )
+
 
 def _have_live_creds() -> bool:
     """Return True if either testnet or production credentials are configured."""
@@ -30,8 +36,6 @@ def _have_live_creds() -> bool:
 @pytest.mark.integration_creds
 def test_websocket_stream_connects_with_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure the WebSocket stream reaches a live connected state."""
-    if os.getenv("BINANCE_WS_TESTS_ENABLE") != "1":
-        pytest.skip("Set BINANCE_WS_TESTS_ENABLE=1 to run live WebSocket tests")
     if not _have_live_creds():
         pytest.skip("Binance credentials not configured")
 
