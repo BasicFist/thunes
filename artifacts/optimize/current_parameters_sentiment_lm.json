@@ -1,0 +1,17 @@
+{
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "strategy": "SENTIMENT_LM",
+  "parameters": {
+    "lookback": 67,
+    "bullish_threshold": 0.95,
+    "bearish_threshold": 0.4,
+    "model_id": "distilbert-base-uncased-finetuned-sst-2-english"
+  },
+  "metrics": {
+    "sharpe_ratio": Infinity,
+    "n_trials": 5
+  },
+  "optimized_at": "2025-10-29T10:07:01.876915",
+  "notes": "Seeded from optuna run with --lookback 30, 5 trials"
+}
