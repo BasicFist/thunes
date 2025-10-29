@@ -139,7 +139,8 @@ class PaperTrader:
         with open(self.params_file) as f:
             data = json.load(f)
 
-        self.last_params_load = datetime.now()
+        file_mtime = self.params_file.stat().st_mtime
+        self.last_params_load = datetime.fromtimestamp(file_mtime)
         logger.info(
             f"Parameters loaded: {data.get('strategy', 'UNKNOWN')} "
             f"(optimized {data.get('optimized_at', 'never')})"
