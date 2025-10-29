@@ -175,19 +175,9 @@ class BinanceWebSocketStream:
             f"(testnet={testnet}, fallback={enable_rest_fallback})"
         )
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_handle_message" and callable(value):
-            # Try to capture external tracking list from closure
-            external_log: list[Any] | None = None
-            closure = getattr(value, "__closure__", None)
-            if closure:
-                for cell in closure:
-                    contents = cell.cell_contents
-                    if isinstance(contents, list):
-                        external_log = contents
-                        break
-            object.__setattr__(self, "_external_message_log", external_log)
-        object.__setattr__(self, name, value)
+    def register_message_log(self, sink: list[Any] | None) -> None:
+        """Attach an external sink that mirrors processed message identifiers."""
+        self._external_message_log = sink
 
     def _init_websocket_manager(self) -> None:
         """Initialize ThreadedWebsocketManager with credentials."""
@@ -288,7 +278,8 @@ class BinanceWebSocketStream:
                 # Log first message for debugging
                 if not self._connected:
                     logger.info(f"First WebSocket message received: {msg}")
-                    self._connected = True
+                    if not self._offline_mode:
+                        self._connected = True
                     self._reconnect_attempts = 0  # Reset on successful connection
 
                 # Future: Heavy processing can be added here without blocking WebSocket
@@ -408,9 +399,10 @@ class BinanceWebSocketStream:
             except Exception as e:
                 logger.error(f"Failed to start WebSocket stream: {e}")
                 self._offline_mode = True
+                self._connected = False
         else:
             logger.info("WebSocket manager disabled (offline mode)")
-            self._connected = True
+            self._connected = False
 
     def stop(self) -> None:
         """Stop WebSocket stream and cleanup resources."""

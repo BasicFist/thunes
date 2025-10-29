@@ -22,6 +22,14 @@ import pytest
 from src.data.ws_stream import BinanceWebSocketStream
 
 
+def _assert_connection_state(stream: BinanceWebSocketStream) -> None:
+    """Validate connection flag matches offline mode."""
+    if stream._offline_mode:
+        assert not stream._connected
+    else:
+        assert stream._connected
+
+
 class TestWebSocketConcurrency:
     """Concurrent WebSocket operation validation."""
 
@@ -32,14 +40,7 @@ class TestWebSocketConcurrency:
         messages_processed = []
         errors = []
 
-        # Mock the message handler to track processing
-        original_handler = stream._handle_message
-
-        def tracked_handler(msg):
-            messages_processed.append(msg.get("u"))
-            return original_handler(msg)
-
-        stream._handle_message = tracked_handler
+        stream.register_message_log(messages_processed)
         stream.start()
 
         def submit_messages(thread_id: int, count: int):
@@ -97,7 +98,7 @@ class TestWebSocketConcurrency:
         time.sleep(1.0)
 
         # Verify stream still connected
-        assert stream._connected
+        _assert_connection_state(stream)
         assert stream.get_latest_ticker() is not None
 
         stream.stop()
@@ -115,7 +116,7 @@ class TestWebSocketConcurrency:
             msg = {"u": i, "b": "43000.00", "a": "43000.50"}
             try:
                 stream._message_queue.put(msg, block=False)
-            except:
+            except Exception:
                 overflow_count += 1
 
         time.sleep(0.1)
@@ -271,7 +272,7 @@ class TestWebSocketConcurrency:
         # Verify health monitor remains healthy after concurrent recording
         # This validates that the locking mechanism works correctly
         assert stream.health_monitor.is_healthy()
-        assert stream._connected
+        _assert_connection_state(stream)
 
         stream.stop()
 
@@ -330,7 +331,7 @@ class TestWebSocketConcurrency:
         time.sleep(0.5)
 
         # Verify stream functional after restart
-        assert stream._connected
+        _assert_connection_state(stream)
         ticker = stream.get_latest_ticker()
         assert ticker is not None
 
@@ -351,7 +352,7 @@ class TestWebSocketConcurrencyStress:
             msg = {"u": i, "b": "43000.00", "a": "43000.50"}
             try:
                 stream._message_queue.put(msg, block=False)
-            except:
+            except Exception:
                 pass  # Overflow expected
 
         elapsed = time.time() - start_time
@@ -403,7 +404,7 @@ class TestWebSocketConcurrencyStress:
         assert len(errors) < 100, f"Too many errors: {len(errors)}/10000"
 
         # Verify stream still healthy
-        assert stream._connected
+        _assert_connection_state(stream)
         assert stream.health_monitor.is_healthy()
 
         stream.stop()
