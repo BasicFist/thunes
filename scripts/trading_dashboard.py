@@ -1,0 +1,559 @@
+#!/usr/bin/env python3
+"""
+THUNES Trading Dashboard - Real-time TUI Monitor
+
+Interactive terminal dashboard for monitoring trading system health,
+positions, risk status, and live activity.
+
+Usage:
+    python scripts/trading_dashboard.py
+    python scripts/trading_dashboard.py --refresh 2  # 2-second refresh
+
+Requirements:
+    pip install rich
+
+Keyboard Controls:
+    q/Q     - Quit
+    r       - Manual refresh
+    k       - Toggle kill-switch details
+    p       - Toggle position details
+    c       - Clear cache
+    h       - Show help
+"""
+
+import argparse
+import json
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from threading import Thread
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+try:
+    from rich.console import Console, Group
+    from rich.layout import Layout
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    from rich.progress import Progress, BarColumn, TextColumn
+except ImportError:
+    print("❌ Error: 'rich' library not installed")
+    print("Install with: pip install rich")
+    sys.exit(1)
+
+from src.config import settings
+from src.models.position import PositionTracker
+from src.risk.manager import RiskManager
+from src.utils.circuit_breaker import circuit_monitor
+
+
+class TradingDashboard:
+    """Real-time trading system dashboard."""
+
+    def __init__(self, refresh_rate: float = 1.0):
+        """
+        Initialize dashboard.
+
+        Args:
+            refresh_rate: Refresh interval in seconds
+        """
+        self.refresh_rate = refresh_rate
+        self.console = Console()
+        self.running = True
+        self.show_kill_switch_details = True
+        self.show_position_details = True
+
+        # Initialize components
+        try:
+            self.position_tracker = PositionTracker()
+            self.risk_manager = RiskManager(
+                position_tracker=self.position_tracker,
+                enable_telegram=False,  # Don't send alerts from dashboard
+            )
+        except Exception as e:
+            self.console.print(f"[red]❌ Failed to initialize: {e}[/red]")
+            sys.exit(1)
+
+    def create_header(self) -> Panel:
+        """Create dashboard header."""
+        now = datetime.utcnow()
+
+        header_text = Text()
+        header_text.append("THUNES TRADING DASHBOARD", style="bold cyan")
+        header_text.append("\n")
+        header_text.append(f"Environment: ", style="white")
+
+        env_style = {
+            "testnet": "yellow",
+            "paper": "cyan",
+            "live": "red bold",
+        }.get(settings.environment, "white")
+        header_text.append(f"{settings.environment.upper()}", style=env_style)
+
+        header_text.append(f" | Symbol: ", style="white")
+        header_text.append(f"{settings.default_symbol}", style="green")
+        header_text.append(f" | {now.strftime('%Y-%m-%d %H:%M:%S')} UTC", style="dim")
+
+        return Panel(header_text, border_style="cyan")
+
+    def create_risk_status_panel(self) -> Panel:
+        """Create risk management status panel."""
+        status = self.risk_manager.get_risk_status()
+
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="white")
+        table.add_column("Status", style="white")
+
+        # Kill-switch status
+        if status["kill_switch_active"]:
+            kill_switch_icon = "🛑"
+            kill_switch_text = "ACTIVE"
+            kill_switch_style = "red bold"
+        else:
+            kill_switch_icon = "✅"
+            kill_switch_text = "Inactive"
+            kill_switch_style = "green"
+
+        table.add_row(
+            "Kill-Switch",
+            Text(kill_switch_text, style=kill_switch_style),
+            kill_switch_icon,
+        )
+
+        # Daily P&L
+        daily_pnl = status["daily_pnl"]
+        daily_limit = status["daily_loss_limit"]
+        utilization = status["daily_loss_utilization"]
+
+        pnl_style = "green" if daily_pnl >= 0 else "red"
+        pnl_text = f"{daily_pnl:+.2f} USDT"
+
+        if utilization > 75:
+            util_style = "red bold"
+        elif utilization > 50:
+            util_style = "yellow"
+        else:
+            util_style = "green"
+
+        table.add_row(
+            "Daily P&L",
+            Text(pnl_text, style=pnl_style),
+            Text(f"{utilization:.0f}%", style=util_style),
+        )
+
+        # Daily loss limit
+        table.add_row(
+            "Daily Loss Limit",
+            f"{daily_limit:.2f} USDT",
+            "",
+        )
+
+        # Position count
+        positions = status["open_positions"]
+        max_positions = status["max_positions"]
+        available = status["position_slots_available"]
+
+        if positions >= max_positions:
+            pos_style = "red bold"
+            pos_icon = "🔴"
+        elif positions >= max_positions * 0.8:
+            pos_style = "yellow"
+            pos_icon = "🟡"
+        else:
+            pos_style = "green"
+            pos_icon = "🟢"
+
+        table.add_row(
+            "Positions",
+            Text(f"{positions}/{max_positions}", style=pos_style),
+            f"{pos_icon} ({available} slots)",
+        )
+
+        # Cool-down status
+        if status["cool_down_active"]:
+            remaining = status["cool_down_remaining_minutes"]
+            table.add_row(
+                "Cool-down",
+                Text(f"{remaining:.1f} min", style="yellow"),
+                "⏳",
+            )
+        else:
+            table.add_row(
+                "Cool-down",
+                Text("None", style="green"),
+                "✅",
+            )
+
+        # Add daily P&L progress bar if there's loss
+        if daily_pnl < 0:
+            progress = Progress(
+                TextColumn("[cyan]Loss Utilization"),
+                BarColumn(bar_width=40),
+                TextColumn("[white]{task.percentage:.0f}%"),
+            )
+            task = progress.add_task("", total=100, completed=utilization)
+
+            return Panel(
+                Group(table, progress),
+                title="[bold cyan]Risk Management Status[/bold cyan]",
+                border_style="cyan",
+            )
+
+        return Panel(
+            table,
+            title="[bold cyan]Risk Management Status[/bold cyan]",
+            border_style="cyan",
+        )
+
+    def create_circuit_breaker_panel(self) -> Panel:
+        """Create circuit breaker status panel."""
+        breaker_status = circuit_monitor.get_status()
+
+        table = Table(show_header=True, box=None, padding=(0, 1))
+        table.add_column("Breaker", style="cyan")
+        table.add_column("State", style="white")
+        table.add_column("Failures", justify="right", style="white")
+        table.add_column("Status", style="white")
+
+        for name, info in breaker_status.items():
+            state = info["state"]
+            fail_count = info["fail_counter"]
+            fail_max = info["fail_max"]
+
+            # Determine state style and icon
+            if state == "open":
+                state_style = "red bold"
+                state_text = "OPEN"
+                icon = "🔴"
+            elif state == "half_open":
+                state_style = "yellow"
+                state_text = "HALF-OPEN"
+                icon = "🟡"
+            else:
+                state_style = "green"
+                state_text = "CLOSED"
+                icon = "🟢"
+
+            # Failure rate warning
+            if fail_count > 0:
+                fail_pct = (fail_count / fail_max) * 100
+                if fail_pct > 60:
+                    fail_style = "red"
+                elif fail_pct > 30:
+                    fail_style = "yellow"
+                else:
+                    fail_style = "white"
+            else:
+                fail_style = "white"
+
+            table.add_row(
+                name,
+                Text(state_text, style=state_style),
+                Text(f"{fail_count}/{fail_max}", style=fail_style),
+                icon,
+            )
+
+        return Panel(
+            table,
+            title="[bold cyan]Circuit Breaker Status[/bold cyan]",
+            border_style="cyan",
+        )
+
+    def create_positions_panel(self) -> Panel:
+        """Create open positions panel."""
+        positions = self.position_tracker.get_all_open_positions()
+
+        if not positions:
+            empty_text = Text("No open positions", style="dim italic", justify="center")
+            return Panel(
+                empty_text,
+                title="[bold cyan]Open Positions[/bold cyan]",
+                border_style="cyan",
+            )
+
+        table = Table(show_header=True, box=None, padding=(0, 1))
+        table.add_column("Symbol", style="cyan")
+        table.add_column("Side", style="white")
+        table.add_column("Qty", justify="right", style="white")
+        table.add_column("Entry", justify="right", style="white")
+        table.add_column("Current", justify="right", style="white")
+        table.add_column("P&L", justify="right", style="white")
+        table.add_column("Age", justify="right", style="dim")
+
+        for position in positions[:10]:  # Show max 10 positions
+            side_style = "green" if position.side == "BUY" else "red"
+
+            # Calculate unrealized P&L (would need current price from exchange)
+            # For now, show entry info only
+            pnl_text = "—"
+            pnl_style = "white dim"
+
+            # Position age
+            if position.entry_time:
+                age = datetime.utcnow() - position.entry_time
+                hours = age.total_seconds() / 3600
+                if hours < 1:
+                    age_text = f"{age.total_seconds()/60:.0f}m"
+                else:
+                    age_text = f"{hours:.1f}h"
+            else:
+                age_text = "—"
+
+            table.add_row(
+                position.symbol,
+                Text(position.side, style=side_style),
+                f"{position.quantity:.8f}",
+                f"{position.entry_price:.2f}" if position.entry_price else "—",
+                "—",  # Current price (would need live data)
+                Text(pnl_text, style=pnl_style),
+                age_text,
+            )
+
+        return Panel(
+            table,
+            title=f"[bold cyan]Open Positions ({len(positions)})[/bold cyan]",
+            border_style="cyan",
+        )
+
+    def create_recent_activity_panel(self) -> Panel:
+        """Create recent activity panel from audit trail."""
+        audit_trail_path = Path("logs/audit_trail.jsonl")
+
+        if not audit_trail_path.exists():
+            empty_text = Text("No audit trail yet", style="dim italic", justify="center")
+            return Panel(
+                empty_text,
+                title="[bold cyan]Recent Activity[/bold cyan]",
+                border_style="cyan",
+            )
+
+        table = Table(show_header=True, box=None, padding=(0, 1))
+        table.add_column("Time", style="dim")
+        table.add_column("Event", style="cyan")
+        table.add_column("Details", style="white")
+
+        try:
+            with open(audit_trail_path, "r") as f:
+                lines = f.readlines()
+                recent_events = lines[-10:]  # Last 10 events
+
+                for line in reversed(recent_events):
+                    try:
+                        event = json.loads(line)
+                        timestamp = event.get("timestamp", "")
+                        event_type = event.get("event", "UNKNOWN")
+
+                        # Parse timestamp
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            time_str = dt.strftime("%H:%M:%S")
+                        except:
+                            time_str = timestamp[:8] if len(timestamp) >= 8 else timestamp
+
+                        # Event styling
+                        if event_type == "KILL_SWITCH_ACTIVATED":
+                            event_style = "red bold"
+                            event_icon = "🛑"
+                        elif event_type == "KILL_SWITCH_DEACTIVATED":
+                            event_style = "green"
+                            event_icon = "✅"
+                        elif event_type == "TRADE_APPROVED":
+                            event_style = "green"
+                            event_icon = "✅"
+                        elif event_type == "TRADE_REJECTED":
+                            event_style = "yellow"
+                            event_icon = "⚠️"
+                        else:
+                            event_style = "white"
+                            event_icon = "ℹ️"
+
+                        # Extract key details
+                        reason = event.get("reason", "")
+                        symbol = event.get("symbol", "")
+                        side = event.get("side", "")
+
+                        if reason:
+                            details = f"{event_icon} {reason}"
+                        elif symbol and side:
+                            details = f"{event_icon} {symbol} {side}"
+                        else:
+                            details = f"{event_icon} —"
+
+                        table.add_row(
+                            time_str,
+                            Text(event_type, style=event_style),
+                            details[:50],  # Truncate long details
+                        )
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            error_text = Text(f"Error reading audit trail: {e}", style="red")
+            return Panel(error_text, title="[bold cyan]Recent Activity[/bold cyan]", border_style="cyan")
+
+        return Panel(
+            table,
+            title="[bold cyan]Recent Activity[/bold cyan]",
+            border_style="cyan",
+        )
+
+    def create_system_metrics_panel(self) -> Panel:
+        """Create system metrics panel."""
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="white")
+
+        # Environment
+        table.add_row("Environment", settings.environment.upper())
+
+        # Default settings
+        table.add_row("Default Symbol", settings.default_symbol)
+        table.add_row("Default Timeframe", settings.default_timeframe)
+        table.add_row("Quote Amount", f"{settings.default_quote_amount} USDT")
+
+        # Risk limits
+        table.add_row("", "")  # Spacer
+        table.add_row("Max Loss/Trade", f"{settings.max_loss_per_trade} USDT")
+        table.add_row("Max Daily Loss", f"{settings.max_daily_loss} USDT")
+        table.add_row("Max Positions", str(settings.max_positions))
+        table.add_row("Cool-down", f"{settings.cool_down_minutes} min")
+
+        return Panel(
+            table,
+            title="[bold cyan]System Configuration[/bold cyan]",
+            border_style="cyan",
+        )
+
+    def create_help_panel(self) -> Panel:
+        """Create help panel with keyboard shortcuts."""
+        help_text = Text()
+        help_text.append("Keyboard Shortcuts:\n\n", style="bold cyan")
+        help_text.append("  q/Q    ", style="yellow")
+        help_text.append("Quit dashboard\n")
+        help_text.append("  r      ", style="yellow")
+        help_text.append("Manual refresh\n")
+        help_text.append("  k      ", style="yellow")
+        help_text.append("Toggle kill-switch details\n")
+        help_text.append("  p      ", style="yellow")
+        help_text.append("Toggle position details\n")
+        help_text.append("  c      ", style="yellow")
+        help_text.append("Clear filter cache\n")
+        help_text.append("  h      ", style="yellow")
+        help_text.append("Show this help\n")
+
+        return Panel(help_text, title="[bold cyan]Help[/bold cyan]", border_style="cyan")
+
+    def create_footer(self) -> Panel:
+        """Create dashboard footer."""
+        footer_text = Text()
+        footer_text.append("Press ", style="dim")
+        footer_text.append("h", style="yellow bold")
+        footer_text.append(" for help | ", style="dim")
+        footer_text.append("q", style="yellow bold")
+        footer_text.append(" to quit | ", style="dim")
+        footer_text.append("r", style="yellow bold")
+        footer_text.append(" to refresh", style="dim")
+        footer_text.append(f" | Refresh rate: {self.refresh_rate}s", style="dim")
+
+        return Panel(footer_text, border_style="dim")
+
+    def create_layout(self) -> Layout:
+        """Create dashboard layout."""
+        layout = Layout()
+
+        # Split into sections
+        layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="main"),
+            Layout(name="footer", size=3),
+        )
+
+        # Split main into columns
+        layout["main"].split_row(
+            Layout(name="left"),
+            Layout(name="right"),
+        )
+
+        # Split left column
+        layout["left"].split_column(
+            Layout(name="risk", size=12),
+            Layout(name="circuit", size=10),
+            Layout(name="config", size=14),
+        )
+
+        # Split right column
+        layout["right"].split_column(
+            Layout(name="positions", size=14),
+            Layout(name="activity", size=22),
+        )
+
+        # Populate layout
+        layout["header"].update(self.create_header())
+        layout["risk"].update(self.create_risk_status_panel())
+        layout["circuit"].update(self.create_circuit_breaker_panel())
+        layout["config"].update(self.create_system_metrics_panel())
+        layout["positions"].update(self.create_positions_panel())
+        layout["activity"].update(self.create_recent_activity_panel())
+        layout["footer"].update(self.create_footer())
+
+        return layout
+
+    def run(self):
+        """Run the dashboard."""
+        try:
+            with Live(
+                self.create_layout(),
+                refresh_per_second=1 / self.refresh_rate,
+                screen=True,
+            ) as live:
+                self.console.print("[cyan]Dashboard started. Press 'q' to quit, 'h' for help.[/cyan]")
+
+                while self.running:
+                    time.sleep(self.refresh_rate)
+                    live.update(self.create_layout())
+
+        except KeyboardInterrupt:
+            self.console.print("\n[yellow]Dashboard stopped by user[/yellow]")
+        except Exception as e:
+            self.console.print(f"\n[red]Error: {e}[/red]")
+
+
+def main():
+    """Main entry point."""
+    parser = argparse.ArgumentParser(
+        description="THUNES Trading Dashboard - Real-time TUI Monitor",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Keyboard Controls:
+  q/Q     Quit
+  r       Manual refresh
+  k       Toggle kill-switch details
+  p       Toggle position details
+  c       Clear cache
+  h       Show help
+        """,
+    )
+    parser.add_argument(
+        "--refresh",
+        type=float,
+        default=1.0,
+        help="Refresh interval in seconds (default: 1.0)",
+    )
+
+    args = parser.parse_args()
+
+    # Validate refresh rate
+    if args.refresh < 0.1:
+        print("❌ Refresh rate must be >= 0.1 seconds")
+        sys.exit(1)
+
+    dashboard = TradingDashboard(refresh_rate=args.refresh)
+    dashboard.run()
+
+
+if __name__ == "__main__":
+    main()
