@@ -4,9 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # THUNES - Quantitative Crypto Trading System
 
-THUNES is a quantitative cryptocurrency trading system with micro-transaction strategies, risk management, and automated execution. Currently in **Phase 11-13** targeting Binance Spot Testnet.
+THUNES is a professional-grade quantitative cryptocurrency trading system with advanced risk management, dynamic position sizing, and market regime awareness. Currently in **Phase 13** preparing for testnet deployment.
 
-**Philosophy**: Safety-first, iterative development, rigorous testing before production.
+**Philosophy**: Safety-first, mathematically-optimized, data-driven, rigorously tested before production.
+
+**Recent Enhancements** (2025-11-09):
+- ✅ Dynamic position sizing (Kelly Criterion)
+- ✅ Slippage tracking & execution cost optimization
+- ✅ Market regime detection (adaptive trading)
+- ✅ Real-time TUI dashboard
+- ✅ Comprehensive system health monitoring
+- ✅ Enhanced audit trail & error messages
 
 ## 🚀 PHASE 13 PRE-DEPLOYMENT STATUS (2025-10-09)
 
@@ -81,7 +89,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 make install                 # Install deps + pre-commit hooks
 
 # Before committing
-make test                    # Run pytest with coverage (105 tests)
+make test                    # Run pytest with coverage (203/225 passing)
 make lint                    # ruff + mypy type checking
 make format                  # black + ruff auto-fix
 make pre-commit             # Run all quality checks
@@ -93,10 +101,28 @@ make paper                  # Execute single paper trade on testnet
 make balance                # Check testnet balance
 
 # Monitoring & debugging
-make logs                   # Tail all logs
+python scripts/trading_dashboard.py     # Real-time TUI dashboard (NEW!)
+python scripts/system_health_check.py   # Comprehensive health check (NEW!)
+make logs                               # Tail all logs
 tail -f logs/paper_trader.log           # Trading activity
 tail -f logs/audit_trail.jsonl | jq '.' # Audit trail (regulatory)
+tail -f logs/slippage_history.csv       # Execution costs (NEW!)
 cat artifacts/backtest/stats_BTCUSDT_1h.csv  # Backtest metrics
+```
+
+### New Profitability Tools (2025-11-09)
+
+```bash
+# Position sizing optimization
+python -c "from src.risk.position_sizer import PositionSizer; ..."
+
+# Slippage analysis
+python -c "from src.execution.slippage_tracker import SlippageTracker; ..."
+
+# Market regime detection
+python -c "from src.analysis.regime_detector import RegimeDetector; ..."
+
+# See docs/GOAL-ORIENTED-IMPROVEMENTS.md for complete usage
 ```
 
 ### Critical Component Tests
@@ -142,7 +168,7 @@ THUNES/
 │   │   └── paper_trader.py # PaperTrader with order execution
 │   │
 │   ├── filters/            # CRITICAL: Exchange order validation
-│   │   └── exchange_filters.py  # Prevents -1013 errors
+│   │   └── exchange_filters.py  # Prevents -1013 errors (+ cache TTL)
 │   │
 │   ├── data/               # Data fetching & processing
 │   │   ├── binance_client.py    # Binance API wrapper
@@ -160,6 +186,15 @@ THUNES/
 │   │   └── rate_limiter.py     # API rate limiting
 │   │
 │   ├── risk/               # Risk management (Phase 8)
+│   │   ├── manager.py          # Kill-switch, position limits, cool-down
+│   │   └── position_sizer.py   # Kelly Criterion sizing (NEW! 🎯)
+│   │
+│   ├── execution/          # Order execution optimization (NEW! 🎯)
+│   │   └── slippage_tracker.py # Execution cost tracking
+│   │
+│   ├── analysis/           # Market analysis (NEW! 🎯)
+│   │   └── regime_detector.py  # Market regime classification
+│   │
 │   ├── alerts/             # Telegram notifications (Phase 9)
 │   └── config.py           # Pydantic settings from .env
 │
@@ -184,6 +219,8 @@ THUNES/
 
 **Mission-critical** for preventing -1013 order rejections. Validates tick size, step size, min notional.
 **Key API**: `filters.validate_order(symbol, quote_qty)`, `filters.prepare_market_order(symbol, side, quote_qty)`
+**NEW**: Cache TTL (1 hour) prevents stale filter data
+**NEW**: `clear_cache()` and `get_cache_stats()` for monitoring
 **Test**: `pytest tests/test_filters.py -v`
 
 ### Circuit Breaker (`src/utils/circuit_breaker.py`)
