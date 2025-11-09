@@ -5,6 +5,7 @@ Critical module to prevent -1013 errors by validating orders against
 exchange rules (tickSize, stepSize, minNotional, etc.)
 """
 
+from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from typing import Any
 
@@ -15,24 +16,32 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+# Cache TTL to prevent stale filter data (Audit Recommendation #4)
+CACHE_TTL_SECONDS = 3600  # 1 hour
+
 
 class ExchangeFilters:
     """Validate and adjust orders according to Binance exchange filters."""
 
-    def __init__(self, client: Client) -> None:
+    def __init__(self, client: Client, cache_ttl_seconds: int = CACHE_TTL_SECONDS) -> None:
         """
         Initialize exchange filters.
 
         Args:
             client: Authenticated Binance client
+            cache_ttl_seconds: Cache TTL in seconds (default: 3600 = 1 hour)
         """
         self.client = client
-        self._symbol_info_cache: dict[str, dict[str, Any]] = {}
-        logger.info("ExchangeFilters initialized")
+        self._symbol_info_cache: dict[str, tuple[dict[str, Any], datetime]] = {}
+        self.cache_ttl_seconds = cache_ttl_seconds
+        logger.info(f"ExchangeFilters initialized (cache_ttl={cache_ttl_seconds}s)")
 
     def _get_symbol_info(self, symbol: str) -> dict[str, Any]:
         """
-        Get symbol information from exchange (with caching).
+        Get symbol information from exchange (with TTL-based caching).
+
+        Cache entries are invalidated after cache_ttl_seconds to prevent stale data.
+        This addresses Audit Recommendation #4: Exchange filter cache staleness.
 
         Args:
             symbol: Trading pair symbol (e.g., "BTCUSDT")
@@ -40,25 +49,38 @@ class ExchangeFilters:
         Returns:
             Dictionary with symbol filters and info
         """
-        if symbol not in self._symbol_info_cache:
-            try:
-                exchange_info = self.client.get_exchange_info()
-                symbol_data = next(
-                    (s for s in exchange_info["symbols"] if s["symbol"] == symbol),
-                    None,
-                )
+        now = datetime.utcnow()
 
-                if not symbol_data:
-                    raise ValueError(f"Symbol {symbol} not found in exchange info")
+        # Check if cache exists and is still valid
+        if symbol in self._symbol_info_cache:
+            cached_data, cached_time = self._symbol_info_cache[symbol]
+            cache_age = (now - cached_time).total_seconds()
 
-                self._symbol_info_cache[symbol] = symbol_data
-                logger.debug(f"Cached exchange info for {symbol}")
+            if cache_age < self.cache_ttl_seconds:
+                logger.debug(f"Using cached exchange info for {symbol} (age: {cache_age:.0f}s)")
+                return cached_data
+            else:
+                logger.debug(f"Cache expired for {symbol} (age: {cache_age:.0f}s, ttl: {self.cache_ttl_seconds}s)")
 
-            except BinanceAPIException as e:
-                logger.error(f"Failed to fetch exchange info: {e}")
-                raise
+        # Fetch fresh data from exchange
+        try:
+            exchange_info = self.client.get_exchange_info()
+            symbol_data = next(
+                (s for s in exchange_info["symbols"] if s["symbol"] == symbol),
+                None,
+            )
 
-        return self._symbol_info_cache[symbol]
+            if not symbol_data:
+                raise ValueError(f"Symbol {symbol} not found in exchange info")
+
+            self._symbol_info_cache[symbol] = (symbol_data, now)
+            logger.debug(f"Cached fresh exchange info for {symbol}")
+
+        except BinanceAPIException as e:
+            logger.error(f"Failed to fetch exchange info: {e}")
+            raise
+
+        return symbol_data
 
     def _get_filter(self, symbol: str, filter_type: str) -> dict[str, Any] | None:
         """
@@ -307,3 +329,42 @@ class ExchangeFilters:
 
         logger.info(f"Prepared SELL order: {order_params}")
         return order_params
+
+    def clear_cache(self, symbol: str | None = None) -> None:
+        """
+        Clear exchange filter cache.
+
+        Useful for testing or forcing cache refresh after exchange filter updates.
+
+        Args:
+            symbol: Specific symbol to clear, or None to clear all cache
+        """
+        if symbol:
+            if symbol in self._symbol_info_cache:
+                del self._symbol_info_cache[symbol]
+                logger.info(f"Cleared cache for {symbol}")
+        else:
+            cache_size = len(self._symbol_info_cache)
+            self._symbol_info_cache.clear()
+            logger.info(f"Cleared entire cache ({cache_size} symbols)")
+
+    def get_cache_stats(self) -> dict[str, Any]:
+        """
+        Get cache statistics for monitoring.
+
+        Returns:
+            Dictionary with cache metrics
+        """
+        now = datetime.utcnow()
+        stats = {
+            "cache_size": len(self._symbol_info_cache),
+            "cache_ttl_seconds": self.cache_ttl_seconds,
+            "symbols_cached": list(self._symbol_info_cache.keys()),
+            "cache_ages_seconds": {},
+        }
+
+        for symbol, (_, cached_time) in self._symbol_info_cache.items():
+            age = (now - cached_time).total_seconds()
+            stats["cache_ages_seconds"][symbol] = round(age, 1)
+
+        return stats

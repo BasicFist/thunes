@@ -8,6 +8,17 @@ This module implements critical safety features:
 - Circuit breaker integration
 - Immutable audit trail for regulatory compliance
 - Telegram alerts for critical events
+
+Thread Safety & Concurrency:
+- All validate_trade() calls are protected by RLock for thread safety
+- Position count uses atomic count_open_positions() API
+- IMPORTANT: This implementation assumes a SINGLE SCHEDULER instance running
+  at a time. If multiple schedulers/processes call validate_trade() concurrently,
+  a TOCTOU race condition exists between position count check and actual order
+  execution. For multi-process deployments, implement distributed locking
+  (e.g., Redis-based locks) or use a centralized validation service.
+
+Audit Recommendation #5: Single-scheduler assumption documented.
 """
 
 import fcntl
@@ -130,6 +141,7 @@ class RiskManager:
             daily_loss = self.get_daily_pnl()
             if daily_loss <= -self.max_daily_loss:
                 self.activate_kill_switch(reason=f"Daily loss {daily_loss:.2f} exceeds limit")
+                utilization = abs(daily_loss / self.max_daily_loss * 100)
                 self._write_audit_log(
                     event="TRADE_REJECTED",
                     details={
@@ -140,17 +152,20 @@ class RiskManager:
                         "strategy_id": strategy_id,
                         "daily_pnl": float(daily_loss),
                         "daily_loss_limit": float(self.max_daily_loss),
+                        "utilization_percent": float(utilization),
                     },
                 )
                 return (
                     False,
-                    f"🛑 KILL-SWITCH: Daily loss {daily_loss:.2f} exceeds limit {-self.max_daily_loss:.2f}",
+                    f"🛑 KILL-SWITCH: Daily loss {daily_loss:.2f} exceeds limit {-self.max_daily_loss:.2f} "
+                    f"({utilization:.0f}% utilization). Deactivate manually to resume trading.",
                 )
 
             # 3. Check per-trade loss limit (for BUY orders)
             if side == "BUY":
                 quote_decimal = Decimal(str(quote_qty))
                 if quote_decimal > self.max_loss_per_trade:
+                    excess = quote_decimal - self.max_loss_per_trade
                     self._write_audit_log(
                         event="TRADE_REJECTED",
                         details={
@@ -160,11 +175,13 @@ class RiskManager:
                             "quote_qty": quote_qty,
                             "strategy_id": strategy_id,
                             "max_loss_per_trade": float(self.max_loss_per_trade),
+                            "excess_amount": float(excess),
                         },
                     )
                     return (
                         False,
-                        f"❌ Trade size {quote_qty:.2f} exceeds max loss per trade {self.max_loss_per_trade}",
+                        f"❌ Trade size {quote_qty:.2f} USDT exceeds max per-trade limit {self.max_loss_per_trade:.2f} USDT "
+                        f"(excess: {excess:.2f}). Reduce trade size or adjust MAX_LOSS_PER_TRADE in .env",
                     )
 
             # 4. Check position count limit (for BUY orders)
